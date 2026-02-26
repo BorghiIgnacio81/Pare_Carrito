@@ -1,0 +1,7 @@
+Date,Start,End,BreakMinutes,NetMinutes,Note
+2026-02-12,,,0,1020,"Saldo inicial acordado: 17h (preparación/estudio/diseño + horas no registradas)"
+"2026-02-13","2026-02-13 02:22","2026-02-13 03:22","0","60","Auto-cierre por inactividad (+60m). Nota original: Probando en navegador (cliente 35)"
+"2026-02-16","","","0","30","Bugfix + pruebas"
+"2026-02-20","2026-02-20 06:40","2026-02-20 07:47","0","68","Dev Pare Carrito"
+"2026-02-20","2026-02-20 07:50","2026-02-20 10:01","0","130","Dev Pare Carrito"
+"2026-02-21","2026-02-21 07:02","2026-02-21 07:49","0","47","Dev Pare Carrito"

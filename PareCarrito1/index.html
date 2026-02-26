@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pedido - Carga rápida</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="loading-curtain" class="loading-curtain" aria-live="polite" aria-busy="true">
+      <div class="loading-curtain__content">
+        <div class="loading-curtain__spinner" aria-hidden="true">
+          <img
+            class="loading-curtain__logo"
+            src="assets/pare-carrito-logo.png"
+            alt=""
+            width="210"
+            height="210"
+          />
+          <div class="loading-curtain__ring"></div>
+        </div>
+        <p class="loading-curtain__text">Cargando…</p>
+      </div>
+    </div>
+
+    <header class="page-header">
+      <div class="page-header__top">
+        <div class="page-header__intro">
+          <h1>Carga de pedidos</h1>
+          <p>Formulario interno para registrar pedidos con múltiples productos.</p>
+        </div>
+
+        <div class="client-select client-select--top">
+          <label for="client-select">Cliente</label>
+          <div class="client-select__row">
+            <select id="client-select">
+              <option value="">Seleccione un cliente</option>
+            </select>
+            <div class="client-select__actions">
+              <button id="new-client" type="button" class="button-secondary">
+                Nuevo cliente
+              </button>
+              <button id="edit-client" type="button" class="button-secondary" disabled>
+                Editar cliente
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="page-header__logo" aria-label="Pare Carrito">
+          <img src="assets/pare-carrito-logo.png" alt="Pare Carrito" width="190" height="190" />
+        </div>
+      </div>
+
+      <div class="page-header__summary">
+        <h3>Resumen del pedido</h3>
+        <p id="summary-client" class="summary-client"></p>
+        <div id="summary-content" class="summary-content">
+          <p>No hay productos cargados.</p>
+        </div>
+
+        <div class="actions actions--inline">
+          <button id="confirm-order-summary" type="button" disabled>Confirmar pedido</button>
+          <button
+            id="clear-order-summary"
+            type="button"
+            class="button-danger"
+            disabled
+            title="Borrar pedido"
+            aria-label="Borrar pedido"
+          >
+            🗑️
+          </button>
+        </div>
+
+        <p id="save-status" class="save-status" aria-live="polite"></p>
+      </div>
+    </header>
+
+    <main>
+      <section aria-labelledby="pedido-title" class="card">
+        <h2 id="pedido-title">Productos del pedido</h2>
+
+        <div class="toolbar">
+          <div class="search-inline">
+            <label for="catalog-search">Buscar producto</label>
+            <input id="catalog-search" type="search" placeholder="Escriba para filtrar" />
+          </div>
+          <div class="search-inline">
+            <label for="order-select">Ordenar</label>
+            <select id="order-select">
+              <option value="alpha">Alfabético</option>
+              <option value="category">Categoría</option>
+              <option value="favorites">Favoritos Cliente</option>
+            </select>
+          </div>
+          <div class="search-inline search-inline--checkbox">
+            <label for="order-direction">Descendente</label>
+            <input id="order-direction" type="checkbox" />
+          </div>
+
+          <div class="search-inline">
+            <label>&nbsp;</label>
+            <button id="paste-order-toggle" type="button" class="button-secondary hidden" disabled>
+              Pegar pedido (WhatsApp)
+            </button>
+          </div>
+        </div>
+
+        <div id="whatsapp-import" class="import-box hidden" aria-live="polite">
+          <h3>Importar pedido por texto</h3>
+          <p>Pegá el mensaje (o varios mensajes) tal cual desde WhatsApp y presioná Procesar.</p>
+
+          <label for="paste-order-text">Texto del pedido</label>
+          <textarea id="paste-order-text" rows="8" placeholder="Ej: 2 bolsas de papa\n1 kg de tomate cherry"></textarea>
+
+          <div class="actions actions--left">
+            <button id="paste-order-apply" type="button" disabled>Procesar</button>
+            <button id="paste-order-clear" type="button" class="button-secondary" disabled>Limpiar</button>
+          </div>
+
+          <div class="import-report">
+            <h4>Resultado</h4>
+            <div id="paste-order-report" class="import-report__content">
+              <p>Sin procesar.</p>
+            </div>
+          </div>
+
+          <div class="import-alias">
+            <h4>Alias (para próximos pedidos)</h4>
+            <p>Si una línea no se reconoce, podés guardarla como alias del producto correcto.</p>
+            <div class="alias-form">
+              <div class="alias-form__field">
+                <label for="alias-source">Texto del cliente</label>
+                <input id="alias-source" type="text" placeholder="Ej: zapallo tronquero" />
+              </div>
+
+              <div class="alias-form__field">
+                <label for="alias-product">Producto</label>
+                <select id="alias-product">
+                  <option value="" selected disabled>Seleccione un producto</option>
+                </select>
+              </div>
+
+              <div class="alias-form__field">
+                <label for="alias-unit">Unidad (opcional)</label>
+                <select id="alias-unit" disabled>
+                  <option value="" selected>(sin override)</option>
+                </select>
+              </div>
+
+              <div class="alias-form__field">
+                <label for="alias-variant">Variante (opcional)</label>
+                <select id="alias-variant" disabled>
+                  <option value="" selected>(sin override)</option>
+                </select>
+              </div>
+
+              <div class="alias-form__field alias-form__field--checkbox">
+                <label for="alias-unitmode">Unidad</label>
+                <input id="alias-unitmode" type="checkbox" />
+              </div>
+
+              <div class="alias-form__field alias-form__field--checkbox">
+                <label for="alias-comment-enabled">Comentario</label>
+                <input id="alias-comment-enabled" type="checkbox" />
+              </div>
+
+              <div id="alias-comment-field" class="alias-form__field hidden">
+                <label for="alias-comment">Texto comentario</label>
+                <input id="alias-comment" type="text" placeholder="Ej: firmes" disabled />
+              </div>
+
+              <div class="actions actions--left">
+                <button id="alias-save" type="button" class="button-secondary" disabled>
+                  Guardar alias
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="product-grid" class="product-grid" aria-live="polite"></div>
+
+        <div class="summary">
+          <h3>Productos sin categoría</h3>
+          <div id="uncategorized-content" class="summary-content">
+            <p>Todo categorizado.</p>
+          </div>
+        </div>
+
+        <div class="actions actions--inline">
+          <button id="confirm-order" type="button" disabled>Confirmar pedido</button>
+          <button
+            id="clear-order"
+            type="button"
+            class="button-danger"
+            disabled
+            title="Borrar pedido"
+            aria-label="Borrar pedido"
+          >
+            🗑️
+          </button>
+        </div>
+      </section>
+
+      <section aria-labelledby="salida-title" class="card">
+        <h2 id="salida-title">Salida preparada</h2>
+        <p>Esta estructura se enviará al backend en una etapa posterior.</p>
+        <pre id="order-output" class="order-output">{}</pre>
+      </section>
+    </main>
+
+    <script type="module" src="app.js"></script>
+
+    <div id="save-confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="save-confirm-title">
+      <div class="modal__dialog">
+        <h3 id="save-confirm-title" class="modal__title">
+          <span class="modal__title-check" aria-hidden="true">✓</span>
+          <span>Listo</span>
+        </h3>
+        <p id="save-confirm-message" class="modal__message"></p>
+        <div class="actions">
+          <button id="save-confirm-ok" type="button">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="save-partial-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="save-partial-title">
+      <div class="modal__dialog">
+        <h3 id="save-partial-title" class="modal__title">
+          <span>Atención</span>
+        </h3>
+        <p id="save-partial-message" class="modal__message"></p>
+        <div class="actions">
+          <button id="save-partial-yes" type="button">Sí, cargar el resto</button>
+          <button id="save-partial-no" type="button" class="button-secondary">No</button>
+        </div>
+      </div>
+    </div>

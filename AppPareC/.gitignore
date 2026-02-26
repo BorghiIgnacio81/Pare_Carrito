@@ -1,0 +1,7 @@
+node_modules/
+.env
+.DS_Store
+
+# Service account keys (avoid committing)
+pare-carrito-*.json
+*service-account*.json

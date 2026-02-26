@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Verdeo">
+  <defs>
+    <linearGradient id="bulb" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff7dc"/>
+      <stop offset="1" stop-color="#e9dfb7"/>
+    </linearGradient>
+    <linearGradient id="leaf1" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#97c83a"/>
+      <stop offset="1" stop-color="#6f9c10"/>
+    </linearGradient>
+    <linearGradient id="leaf2" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#cfe88f"/>
+      <stop offset="1" stop-color="#98c83a"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Leaves (fan) -->
+  <path d="M64 18 C70 34,72 55,62 82 C57 95,58 106,66 116 C49 104,44 93,46 78 C49 52,49 36,45 22 Z" fill="url(#leaf2)"/>
+  <path d="M70 12 C84 30,86 58,74 88 C69 101,71 112,82 120 C66 111,58 101,58 86 C58 55,58 34,56 16 Z" fill="url(#leaf1)"/>
+  <path d="M86 20 C98 38,98 60,86 84 C80 96,80 107,92 116 C77 110,70 101,71 88 C72 62,74 44,78 26 Z" fill="#8fbe2f"/>
+
+  <!-- Curved leaf to the right -->
+  <path d="M88 44 C110 50,118 64,114 82 C111 96,98 106,84 112 C98 100,102 88,104 76 C107 58,101 50,88 44 Z" fill="#6f9c10"/>
+
+  <!-- Bulb -->
+  <path d="M28 78 C28 64,42 54,56 56 C70 58,82 74,78 90 C74 106,54 114,40 108 C32 104,28 92,28 78 Z" fill="url(#bulb)"/>
+  <path d="M44 60 C52 58,62 62,68 72 C52 70,40 78,34 90 C32 78,34 64,44 60 Z" fill="#fffde9" opacity="0.85"/>
+
+  <!-- Roots -->
+  <path d="M24 94 C18 94,14 98,12 104 C18 104,22 102,26 98 Z" fill="#d8c46a"/>
+  <path d="M30 100 C26 102,24 106,24 112 C30 112,34 108,36 104 Z" fill="#d8c46a"/>
+  <path d="M38 104 C34 106,32 110,32 116 C38 116,42 112,44 108 Z" fill="#d8c46a"/>
+</svg>
