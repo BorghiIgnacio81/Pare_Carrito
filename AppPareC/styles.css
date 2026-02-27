@@ -121,6 +121,14 @@ body {
   min-width: 240px;
 }
 
+.client-select__top-action {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
 .client-select__row {
   display: flex;
   align-items: center;
@@ -405,35 +413,6 @@ main {
   border-radius: 6px;
   border: 1px solid var(--border);
 }
-
-.alias-recovery {
-  margin-top: 12px;
-  border-top: 1px dashed var(--border);
-  padding-top: 10px;
-  display: grid;
-  gap: 8px;
-}
-
-.alias-recovery textarea {
-  width: 100%;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-    monospace;
-  resize: vertical;
-}
-
-.alias-recovery__status {
-  margin: 0;
-  color: #1f3a1f;
-  font-size: 0.9rem;
-}
-
-.alias-recovery__status.is-error {
-  color: #8b1f1f;
-}
-
 
 .search-inline {
   display: grid;

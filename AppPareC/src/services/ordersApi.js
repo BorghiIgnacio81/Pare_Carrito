@@ -17,6 +17,16 @@ const fetchJson = async (url, init) => {
   return { response, data };
 };
 
+const fetchWithTimeout = async (url, init, timeoutMs = 15000) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 export const createOrdersApi = (options = {}) => {
   const baseUrl = String(options.baseUrl || getDefaultOrdersApiBaseUrl());
 
@@ -27,7 +37,7 @@ export const createOrdersApi = (options = {}) => {
       const url = `${baseUrl}/orders`;
       let response;
       try {
-        response = await fetch(url, { cache: "no-store" });
+        response = await fetchWithTimeout(url, { cache: "no-store" }, 15000);
       } catch (error) {
         const detail = String(error?.message || error || "").trim();
         const extra = detail ? ` Detalle: ${detail}` : "";

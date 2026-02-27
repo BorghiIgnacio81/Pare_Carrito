@@ -50,14 +50,10 @@ export const createImportBoxController = ({
       pasteOrderClear.disabled = !hasClient || (!hasText && !(pasteOrderReport?.textContent || "").trim());
     }
 
-    const wantsComment = Boolean(aliasCommentEnabledCheckbox?.checked);
-    const commentOk = !wantsComment || Boolean(aliasCommentInput?.value?.trim());
-
     const aliasReady =
       Boolean(clientSelect?.value) &&
       Boolean(aliasSourceInput?.value?.trim()) &&
-      Boolean(aliasProductSelect?.value) &&
-      commentOk;
+      Boolean(aliasProductSelect?.value);
     if (aliasSaveButton) {
       aliasSaveButton.disabled = !aliasReady;
     }
@@ -260,52 +256,11 @@ export const createImportBoxController = ({
 
     pasteOrderClear?.addEventListener("click", reset);
 
-    aliasSaveButton?.addEventListener("click", () => {
-      const clientId = clientSelect?.value || "";
-      if (!clientId) {
-        return;
-      }
-      const source = aliasSourceInput?.value || "";
-      const productId = aliasProductSelect?.value || "";
-      if (!source.trim() || !productId) {
-        return;
-      }
-      const unit = aliasUnitSelect?.value || "";
-      const variant = aliasVariantSelect?.value || "";
-      const unitMode = Boolean(aliasUnitModeCheckbox?.checked);
-      const wantsComment = Boolean(aliasCommentEnabledCheckbox?.checked);
-      const comment = wantsComment ? String(aliasCommentInput?.value || "").trim() : "";
-
-      const aliases = loadClientAliases(clientId);
-      const storageKey = getAliasStorageKeyFromSource(source, { parseQuantityUnitAndName });
-      if (!storageKey) {
-        return;
-      }
-      aliases[storageKey] = {
-        productId,
-        unit: unit || undefined,
-        variant: variant || undefined,
-        unitMode: unitMode || undefined,
-        comment: comment || undefined,
-      };
-      saveClientAliases(clientId, aliases);
-
-      if (aliasSaveButton) {
-        aliasSaveButton.textContent = "Alias guardado";
-        setTimeout(() => {
-          aliasSaveButton.textContent = "Guardar alias";
-        }, 1000);
-      }
-
-      // Reprocesar automáticamente el texto pegado para reflejar el nuevo alias.
-      processPasteText();
-    });
-
     pasteOrderApply?.addEventListener("click", processPasteText);
 
     // Estado inicial del UI de comentario.
     syncAliasCommentUi();
   };
 
-  return { init, reset, updateImportUiState, renderPasteReport };
+  return { init, reset, updateImportUiState, renderPasteReport, processPasteText };
 };

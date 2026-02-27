@@ -52,6 +52,7 @@ let rawProducts = [];
 let sheetHeaders = [];
 let products = [];
 let productsById = new Map();
+let sheetColumnResolver = null;
 let favoritesStore = { getData: () => ({}) };
 let getFavoritePresets = () => [];
 let rowCounter = 0;
@@ -118,10 +119,21 @@ const aliasCommentEnabledCheckbox = document.querySelector("#alias-comment-enabl
 const aliasCommentField = document.querySelector("#alias-comment-field");
 const aliasCommentInput = document.querySelector("#alias-comment");
 const aliasSaveButton = document.querySelector("#alias-save");
-const aliasRecoveryInput = document.querySelector("#alias-recovery-input");
-const aliasRecoveryImportButton = document.querySelector("#alias-recovery-import");
-const aliasRecoveryExportButton = document.querySelector("#alias-recovery-export");
-const aliasRecoveryStatus = document.querySelector("#alias-recovery-status");
+const updateTareasPdfButton = document.querySelector("#update-tareas-pdf");
+const updateImprimirPedidosButton = document.querySelector("#update-imprimir-pedidos");
+
+const setSaveStatusMessage = (message, state = "") => {
+  if (!saveStatus) {
+    return;
+  }
+  saveStatus.textContent = String(message || "");
+  saveStatus.classList.remove("save-status--success", "save-status--error");
+  if (state === "success") {
+    saveStatus.classList.add("save-status--success");
+  } else if (state === "error") {
+    saveStatus.classList.add("save-status--error");
+  }
+};
 
 const getClientLabelForAliases = (clientId) => {
   const client = (clients || []).find((c) => String(c.id) === String(clientId));
@@ -144,6 +156,18 @@ const startNewImportRun = () => {
     runId: importRunCounter,
     byClientId: new Map(),
   };
+};
+
+const syncAliasesToServer = async () => {
+  try {
+    const payload = JSON.parse(exportAliasesDump().json || "{}");
+    const data = payload?.data || {};
+    if (Object.keys(data).length) {
+      await ordersApi.saveAliases({ data });
+    }
+  } catch (error) {
+    console.warn("No se pudieron guardar alias en el server:", error);
+  }
 };
 
 const formatDateForPrompt = (value) => {
@@ -223,7 +247,10 @@ const normalizeCitrusUnit = (productId, unit) => {
   if (!pid || !u) {
     return u;
   }
-  if ((pid === "limon" || pid === "naranja" || pid === "pomelo") && (u === "Cajón" || u === "Caja")) {
+  if (
+    (pid === "limon" || pid === "naranja" || pid === "pomelo") &&
+    (u === "Cajón" || u === "Bolsa")
+  ) {
     return "Jaula";
   }
   return u;
@@ -241,10 +268,23 @@ const applyBusinessUnitAndQuantityRules = ({
   const productName = String(product?.name || "").trim().toLowerCase();
   const raw = String(parsedLine?.raw || "").trim().toLowerCase();
   const parsedUnit = String(parsedLine?.unit || "").trim();
+  const rawHasDozen = /\bdoc(ena)?s?\b/i.test(raw);
   const isUnitExplicit = Boolean(unitExplicit || parsedUnit);
+  const isUnitExplicitFromText = Boolean(parsedUnit) || rawHasDozen;
 
   let nextUnit = String(unit || "").trim();
   let nextQuantity = Number.isFinite(quantity) ? quantity : 0;
+  let didConvertToDocena = false;
+
+  const convertToDocena = () => {
+    if (didConvertToDocena) {
+      return;
+    }
+    nextQuantity = nextQuantity / 12;
+    nextQuantity = Math.round(nextQuantity * 1000) / 1000;
+    nextUnit = "Docena";
+    didConvertToDocena = true;
+  };
 
   const isManzana = pid === "manzana" || /\bmanzana(s)?\b/.test(productName) || /\bmanzana(s)?\b/.test(raw);
   const mentionsMaple = /\bmaple(s)?\b/.test(raw);
@@ -262,15 +302,42 @@ const applyBusinessUnitAndQuantityRules = ({
     return { unit: nextUnit, quantity: nextQuantity };
   }
 
+  const isPalta = pid === "palta" || /\bpalta(s)?\b/.test(productName) || /\bpalta(s)?\b/.test(raw);
+  if (isPalta) {
+    const unitKey = String(nextUnit || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim();
+    if (unitKey === "cajon") {
+      // Regla de negocio: 1 cajon de palta = 18 kg.
+      nextQuantity = nextQuantity * 18;
+      nextQuantity = Math.round(nextQuantity * 1000) / 1000;
+      nextUnit = "Kg";
+      return { unit: nextUnit, quantity: nextQuantity };
+    }
+  }
+
   const isLimon = pid === "limon" || /\blim[oó]n(es)?\b/.test(productName) || /\blim[oó]n(es)?\b/.test(raw);
   const isNaranja = pid === "naranja" || /\bnaranja(s)?\b/.test(productName) || /\bnaranja(s)?\b/.test(raw);
   const isPomelo = pid === "pomelo" || /\bpomelo(s)?\b/.test(productName) || /\bpomelo(s)?\b/.test(raw);
+  if (isLimon || isNaranja || isPomelo) {
+    // Regla de negocio: en cítricos, Bolsa/Cajón/Caja => Jaula.
+    nextUnit = normalizeCitrusUnit(pid, nextUnit);
+  }
+  const loweredUnit = () => String(nextUnit || "").trim().toLowerCase();
+  const isUnidadUnit = () => {
+    const current = loweredUnit();
+    return current === "unidad" || current === "unidades";
+  };
   if (!isUnitExplicit && (isLimon || isNaranja || isPomelo)) {
     // Regla de negocio: si el cliente escribe cantidad sin unidad, interpretamos "unidades"
     // y convertimos a docenas (12 uni = 1 docena).
-    nextQuantity = nextQuantity / 12;
-    nextQuantity = Math.round(nextQuantity * 1000) / 1000;
-    nextUnit = "Docena";
+    convertToDocena();
+  }
+  if ((isLimon || isNaranja || isPomelo) && isUnidadUnit()) {
+    // Regla: si la unidad es "Unidad" en cítricos, convertir a Docena.
+    convertToDocena();
   }
 
   const isEggs = pid === "huevos" || pid === "huevo" || /\bhuevo(s)?\b/.test(productName);
@@ -301,24 +368,80 @@ const applyBusinessUnitAndQuantityRules = ({
     /\bbanana(s)?\b/.test(raw) ||
     /\bpl[aá]tano(s)?\b/.test(raw);
   if (isBanana) {
-    const unitWasExplicit = Boolean(isUnitExplicit);
+    const unitWasExplicit = Boolean(isUnitExplicitFromText);
     // Si el cliente escribe "6 bananas" (sin unidad), y el default del producto es Docena,
     // interpretamos la cantidad como unidades y convertimos a docenas.
-    const loweredUnit = String(nextUnit || "").trim().toLowerCase();
-    const isDozenUnit = loweredUnit === "docena" || loweredUnit === "docenas";
-    const isUnidadUnit = loweredUnit === "unidad" || loweredUnit === "unidades";
+    const current = loweredUnit();
+    const isDozenUnit = current === "docena" || current === "docenas";
+    const isUnidadUnit = current === "unidad" || current === "unidades";
 
     // Caso explícito: "24 unid. bananas" => 2 docenas.
     if (isUnidadUnit) {
-      nextQuantity = nextQuantity / 12;
-      nextQuantity = Math.round(nextQuantity * 1000) / 1000;
-      nextUnit = "Docena";
+      convertToDocena();
     }
     if (!unitWasExplicit && isDozenUnit) {
-      nextQuantity = nextQuantity / 12;
-      nextQuantity = Math.round(nextQuantity * 1000) / 1000;
-      nextUnit = "Docena";
+      convertToDocena();
     }
+  }
+
+  const productHasDocena =
+    (Array.isArray(product?.units) && product.units.includes("Docena")) ||
+    String(product?.defaultUnit || "") === "Docena";
+  const currentUnit = loweredUnit();
+  const unitIsDocena = currentUnit === "docena" || currentUnit === "docenas";
+  if (productHasDocena && !unitIsDocena) {
+    if (isUnidadUnit() || !isUnitExplicit) {
+      convertToDocena();
+    }
+  }
+
+  const normalizeDocenaText = (value) =>
+    String(value || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const docenaPhrases = [
+    "banana",
+    "bananas",
+    "pomelo",
+    "mandarina",
+    "naranja",
+    "limon",
+    "banana premium",
+    "mandarina grande",
+    "lima",
+    "choclo blanco",
+    "choclo amarillo",
+  ];
+
+  const normalizedProductName = normalizeDocenaText(productName);
+  const normalizedRaw = normalizeDocenaText(raw);
+  const isDocenaProduct = docenaPhrases.some((phrase) => {
+    const key = slugify(phrase);
+    if (pid === key) {
+      return true;
+    }
+    return (
+      (normalizedProductName && normalizedProductName.includes(phrase)) ||
+      (normalizedRaw && normalizedRaw.includes(phrase))
+    );
+  });
+
+  if (isDocenaProduct) {
+    const unitIsDocena = ["docena", "docenas"].includes(loweredUnit());
+    if (isUnidadUnit() || (!isUnitExplicitFromText && unitIsDocena) || !isUnitExplicitFromText) {
+      convertToDocena();
+    }
+  }
+
+  const unitIsDocenaFromPreferred =
+    ["docena", "docenas"].includes(loweredUnit()) && !isUnitExplicitFromText;
+  if (unitIsDocenaFromPreferred && (productHasDocena || isDocenaProduct || isBanana || isLimon || isNaranja || isPomelo)) {
+    convertToDocena();
   }
 
   return { unit: nextUnit, quantity: nextQuantity };
@@ -358,6 +481,197 @@ const resolveParsedLineToItem = (parsedLine, clientId) => {
     if (lk.includes(rk)) return left;
     if (rk.includes(lk)) return right;
     return `${left} ${right}`.trim();
+  };
+
+  const normalizeLookupKey = (value) =>
+    normalizeSpaces(String(value || ""))
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+
+  const normalizeTokenText = (value) =>
+    normalizeSpaces(String(value || ""))
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const tokenizeText = (value) => normalizeTokenText(value).split(" ").filter(Boolean);
+
+  const hasHydroponicHint = () => {
+    const combined = `${parsedLine.raw || ""} ${parsedLine.name || ""} ${parsedLine.commentFromText || ""}`;
+    return tokenizeText(combined).some((token) => token.startsWith("hidro"));
+  };
+
+  const coerceRuculaVariant = (product, variant) => {
+    if (!product || product.id !== "rucula") {
+      return variant;
+    }
+    const variants = Array.isArray(product.variants) ? product.variants.filter(Boolean) : [];
+    if (!variants.length) {
+      return variant;
+    }
+    const findVariant = (key) =>
+      variants.find((value) => normalizeTokenText(value) === key) || "";
+    const comunVariant = findVariant("comun");
+    const hidroVariant = findVariant("hidroponica");
+    if (hasHydroponicHint()) {
+      return variant || hidroVariant || variant;
+    }
+    return comunVariant || variant;
+  };
+
+  const coercePaltaVariant = (product, variant) => {
+    if (!product || product.id !== "palta") {
+      return variant;
+    }
+    const variants = Array.isArray(product.variants) ? product.variants.filter(Boolean) : [];
+    if (!variants.length) {
+      return variant;
+    }
+    if (variant) {
+      return variant;
+    }
+    const combined = `${parsedLine.raw || ""} ${parsedLine.name || ""} ${parsedLine.commentFromText || ""}`;
+    const tokens = tokenizeText(combined);
+    const findVariant = (key) =>
+      variants.find((value) => normalizeTokenText(value) === key) || "";
+    const maduraVariant = findVariant("madura");
+    const verdeVariant = findVariant("verde");
+    const hasVerde = tokens.some((token) => token.startsWith("verd"));
+    const hasMadura = tokens.some((token) => token.startsWith("madur"));
+    if (hasVerde && verdeVariant) {
+      return verdeVariant;
+    }
+    if (hasMadura && maduraVariant) {
+      return maduraVariant;
+    }
+    return maduraVariant || variant;
+  };
+
+  const coerceTomateVariant = (product, variant, unit) => {
+    if (!product || product.id !== "tomate") {
+      return variant;
+    }
+    if (variant) {
+      return variant;
+    }
+    const variants = Array.isArray(product.variants) ? product.variants.filter(Boolean) : [];
+    if (!variants.length) {
+      return variant;
+    }
+    const findVariant = (key) =>
+      variants.find((value) => normalizeTokenText(value) === key) || "";
+    const peritaVariant = findVariant("perita");
+    const normalVariant = findVariant("normal");
+    const unitKey = String(unit || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim();
+    if (unitKey === "kg") {
+      return peritaVariant || variant;
+    }
+    if (unitKey === "cajon") {
+      return normalVariant || variant;
+    }
+    return variant;
+  };
+
+  const coerceSpecialVariant = (product, variant, unit) => {
+    const ruculaVariant = coerceRuculaVariant(product, variant);
+    const paltaVariant = coercePaltaVariant(product, ruculaVariant);
+    return coerceTomateVariant(product, paltaVariant, unit);
+  };
+
+  const getUiVariantLabel = (product, variant) => {
+    if (!product) {
+      return String(variant || "").trim();
+    }
+    const normalized = normalizeVariantForSheetMatch(variant);
+    if (!normalized) {
+      const label = product.variantLabelByKey?.[""];
+      return String(label || "").trim();
+    }
+    return String(variant || "").trim();
+  };
+
+  const splitLookupTokens = (value) => normalizeLookupKey(value).split(" ").filter(Boolean);
+
+  const getSourceTokens = () => splitLookupTokens(parsedLine.name || parsedLine.raw || "");
+
+  const tokenMatchesKey = (token, key) => {
+    if (!token || !key) {
+      return false;
+    }
+    if (token === key) {
+      return true;
+    }
+    if (token === `${key}s`) {
+      return true;
+    }
+    if (token === `${key}es`) {
+      return true;
+    }
+    return false;
+  };
+
+  const pickColorVariantFromTokens = (product, sourceTokens) => {
+    if (!product || !Array.isArray(product.variants) || !product.variants.length) {
+      return "";
+    }
+    const tokens = Array.isArray(sourceTokens) ? sourceTokens : [];
+    if (!tokens.length) {
+      return "";
+    }
+    const wantsRojo = tokens.includes("r") || tokens.some((token) => token.startsWith("roj"));
+    const wantsVerde = tokens.includes("v") || tokens.some((token) => token.startsWith("verd"));
+    if (!wantsRojo && !wantsVerde) {
+      return "";
+    }
+    const normalizedVariants = product.variants
+      .map((value) => ({ raw: value, key: normalizeTokenText(value) }))
+      .filter((entry) => entry.key);
+    const rojoMatch = wantsRojo
+      ? normalizedVariants.find((entry) => entry.key.startsWith("roj"))
+      : null;
+    const verdeMatch = wantsVerde
+      ? normalizedVariants.find((entry) => entry.key.startsWith("verd"))
+      : null;
+    if (rojoMatch && verdeMatch) {
+      return "";
+    }
+    if (rojoMatch) {
+      return rojoMatch.raw;
+    }
+    if (verdeMatch) {
+      return verdeMatch.raw;
+    }
+    return "";
+  };
+
+  const pickUniqueBestMatch = (candidates) => {
+    if (!candidates.length) {
+      return null;
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    if (candidates.length > 1 && candidates[0].score === candidates[1].score) {
+      return null;
+    }
+    return candidates[0].value;
+  };
+
+  const finalizeResolvedItem = (item) => {
+    if (!item) {
+      return null;
+    }
+    if (!sheetColumnResolver || typeof sheetColumnResolver.resolve !== "function") {
+      return item;
+    }
+    const match = sheetColumnResolver.resolve(item);
+    return match ? item : null;
   };
 
   const getMostRecentComboForClient = (productId, effectiveClientId) => {
@@ -416,25 +730,37 @@ const resolveParsedLineToItem = (parsedLine, clientId) => {
   const aliases = loadClientAliases(clientId, getClientLabelForAliases(clientId));
   const aliasKeyFromName = normalizeAliasKey(parsedLine.name);
   const aliasKeyFromRaw = normalizeAliasKey(parsedLine.raw);
+  const aliasKeyFromNameNormalized = getAliasStorageKeyFromSource(parsedLine.name, { parseQuantityUnitAndName });
+  const aliasKeyFromRawNormalized = getAliasStorageKeyFromSource(parsedLine.raw, { parseQuantityUnitAndName });
   const aliasKeyFromNameSingular = /s$/.test(aliasKeyFromName) ? aliasKeyFromName.replace(/s$/, "") : "";
   const aliasKeyFromRawSingular = /s$/.test(aliasKeyFromRaw) ? aliasKeyFromRaw.replace(/s$/, "") : "";
+  const aliasKeyFromNameNormalizedSingular = /s$/.test(aliasKeyFromNameNormalized)
+    ? aliasKeyFromNameNormalized.replace(/s$/, "")
+    : "";
+  const aliasKeyFromRawNormalizedSingular = /s$/.test(aliasKeyFromRawNormalized)
+    ? aliasKeyFromRawNormalized.replace(/s$/, "")
+    : "";
+  const aliasLookupKeys = [
+    aliasKeyFromName,
+    aliasKeyFromNameSingular,
+    aliasKeyFromNameNormalized,
+    aliasKeyFromNameNormalizedSingular,
+    aliasKeyFromRaw,
+    aliasKeyFromRawSingular,
+    aliasKeyFromRawNormalized,
+    aliasKeyFromRawNormalizedSingular,
+  ].filter(Boolean);
   const isCoreano = /\bcorean(ito|o)?\b/i.test(String(parsedLine.name || "")) || /\bcorean(ito|o)?\b/i.test(String(parsedLine.raw || ""));
-  const alias =
-    aliases[aliasKeyFromName] ||
-    (aliasKeyFromNameSingular ? aliases[aliasKeyFromNameSingular] : null) ||
-    aliases[aliasKeyFromRaw] ||
-    (aliasKeyFromRawSingular ? aliases[aliasKeyFromRawSingular] : null) ||
-    globalAliases[aliasKeyFromName] ||
-    (aliasKeyFromNameSingular ? globalAliases[aliasKeyFromNameSingular] : null) ||
-    globalAliases[aliasKeyFromRaw] ||
-    (aliasKeyFromRawSingular ? globalAliases[aliasKeyFromRawSingular] : null) ||
-    null;
+  const aliasKey = aliasLookupKeys.find((key) => aliases[key]);
+  const alias = aliasKey ? aliases[aliasKey] : null;
+  const globalAliasKey = aliasLookupKeys.find((key) => globalAliases[key]);
+  const globalAlias = globalAliasKey ? globalAliases[globalAliasKey] : null;
 
   // Regla de negocio: "coreano/coreanito" siempre es Zapallo Amarillo por Kg.
   // Esto evita que un alias viejo lo mande a "Zapallito Verde".
   const effectiveAlias = isCoreano
     ? { productId: "zapallo", variant: "Amarillo", unit: "Kg" }
-    : alias;
+    : alias || globalAlias;
 
   const aliasComment = String(effectiveAlias?.comment || "").trim();
   const effectiveComment = mergeComments(parsedComment, aliasComment);
@@ -477,35 +803,51 @@ const resolveParsedLineToItem = (parsedLine, clientId) => {
 
       if (effectiveAlias.unitMode || shouldTreatAtadoAsUnitForProduct(product.id, parsedLine)) {
         const count = parseUniCount(String(parsedLine.raw || parsedLine.name || ""));
-        return {
+        return finalizeResolvedItem({
           productId: resolvedAliasProductId,
           name: product.name,
           unit,
           quantity,
           quantityText: count ? `${count} uni` : parsedLine.quantityText,
           unitMode: true,
-          variant: normalizeCitrusUnit(product.id, preferred.variant || ""),
+          variant: getUiVariantLabel(
+            product,
+            normalizeCitrusUnit(product.id, coerceSpecialVariant(product, preferred.variant || "", unit))
+          ),
           comment: effectiveComment,
           importOrder: parsedLine.importOrder,
-        };
+        });
       }
 
       quantity = Number(quantity || 0);
       if (effectiveAlias.unitMode) {
-        return {
+        return finalizeResolvedItem({
           productId: resolvedAliasProductId,
           name: product.name,
           unit,
           quantity,
           quantityText: parsedLine.quantityText,
           unitMode: true,
-          variant: normalizeCitrusUnit(product.id, effectiveAlias.variant || parsedLine.variant || variantFromAliasProductId || ""),
+          variant: getUiVariantLabel(
+            product,
+            normalizeCitrusUnit(
+              product.id,
+              coerceSpecialVariant(
+                product,
+                effectiveAlias.variant || parsedLine.variant || variantFromAliasProductId || "",
+                unit
+              )
+            )
+          ),
           comment: effectiveComment,
           importOrder: parsedLine.importOrder,
-        };
+        });
       }
 
-      const resolvedVariant = normalizeCitrusUnit(product.id, preferred.variant || "");
+      const resolvedVariant = normalizeCitrusUnit(
+        product.id,
+        coerceSpecialVariant(product, preferred.variant || "", unit)
+      );
       const normalizedVariant = normalizeVariantForSheetMatch(resolvedVariant);
       const resolved = applyBusinessUnitAndQuantityRules({
         productId: product.id,
@@ -515,28 +857,36 @@ const resolveParsedLineToItem = (parsedLine, clientId) => {
         parsedLine,
         unitExplicit: preferred.unitExplicit,
       });
-      return {
+      return finalizeResolvedItem({
         productId: resolvedAliasProductId,
         name: product.name,
         unit: resolved.unit,
         quantity: resolved.quantity,
         unitMode: false,
-        variant: normalizedVariant ? resolvedVariant : "",
+        variant: normalizedVariant ? resolvedVariant : getUiVariantLabel(product, resolvedVariant),
         comment: effectiveComment,
         importOrder: parsedLine.importOrder,
-      };
+      });
     }
   }
 
   const parsedName = parseQuantityUnitAndName(parsedLine.raw, unitSynonyms);
   if (parsedName) {
     const productAliasKey = normalizeAliasKey(parsedName.name);
+    const productAliasKeyNormalized = getAliasStorageKeyFromSource(parsedName.name, { parseQuantityUnitAndName });
     const productAliasKeySingular = /s$/.test(productAliasKey) ? productAliasKey.replace(/s$/, "") : "";
+    const productAliasKeyNormalizedSingular = /s$/.test(productAliasKeyNormalized)
+      ? productAliasKeyNormalized.replace(/s$/, "")
+      : "";
     const aliasFromParsed =
       aliases[productAliasKey] ||
       (productAliasKeySingular ? aliases[productAliasKeySingular] : null) ||
+      (productAliasKeyNormalized ? aliases[productAliasKeyNormalized] : null) ||
+      (productAliasKeyNormalizedSingular ? aliases[productAliasKeyNormalizedSingular] : null) ||
       globalAliases[productAliasKey] ||
       (productAliasKeySingular ? globalAliases[productAliasKeySingular] : null) ||
+      (productAliasKeyNormalized ? globalAliases[productAliasKeyNormalized] : null) ||
+      (productAliasKeyNormalizedSingular ? globalAliases[productAliasKeyNormalizedSingular] : null) ||
       null;
 
     if (aliasFromParsed?.productId) {
@@ -558,20 +908,26 @@ const resolveParsedLineToItem = (parsedLine, clientId) => {
 
         if (aliasFromParsed.unitMode || shouldTreatAtadoAsUnitForProduct(product.id, parsedLine)) {
           const count = parseUniCount(String(parsedLine.raw || parsedLine.name || ""));
-          return {
+          return finalizeResolvedItem({
             productId: product.id,
             name: product.name,
             unit,
             quantity,
             quantityText: count ? `${count} uni` : parsedLine.quantityText,
             unitMode: true,
-            variant: normalizeCitrusUnit(product.id, preferred.variant || ""),
+            variant: getUiVariantLabel(
+              product,
+              normalizeCitrusUnit(product.id, coerceSpecialVariant(product, preferred.variant || "", unit))
+            ),
             comment: effectiveComment,
             importOrder: parsedLine.importOrder,
-          };
+          });
         }
 
-        const resolvedVariant = normalizeCitrusUnit(product.id, preferred.variant || "");
+        const resolvedVariant = normalizeCitrusUnit(
+          product.id,
+          coerceSpecialVariant(product, preferred.variant || "", unit)
+        );
         const normalizedVariant = normalizeVariantForSheetMatch(resolvedVariant);
         const resolved = applyBusinessUnitAndQuantityRules({
           productId: product.id,
@@ -581,22 +937,30 @@ const resolveParsedLineToItem = (parsedLine, clientId) => {
           parsedLine,
           unitExplicit: preferred.unitExplicit,
         });
-        return {
+        return finalizeResolvedItem({
           productId: product.id,
           name: product.name,
           unit: resolved.unit,
           quantity: resolved.quantity,
           unitMode: false,
-          variant: normalizedVariant ? resolvedVariant : "",
+          variant: normalizedVariant ? resolvedVariant : getUiVariantLabel(product, resolvedVariant),
           comment: effectiveComment,
           importOrder: parsedLine.importOrder,
-        };
+        });
       }
     }
   }
 
-  const aliasKeyFromSource = normalizeAliasKey(parsedLine.raw);
-  const aliasFromRaw = aliases[aliasKeyFromSource] || globalAliases[aliasKeyFromSource] || null;
+  const aliasKeyFromSource = getAliasStorageKeyFromSource(parsedLine.raw, { parseQuantityUnitAndName });
+  const aliasKeyFromSourceSingular = /s$/.test(aliasKeyFromSource)
+    ? aliasKeyFromSource.replace(/s$/, "")
+    : "";
+  const aliasFromRaw =
+    (aliasKeyFromSource ? aliases[aliasKeyFromSource] : null) ||
+    (aliasKeyFromSourceSingular ? aliases[aliasKeyFromSourceSingular] : null) ||
+    (aliasKeyFromSource ? globalAliases[aliasKeyFromSource] : null) ||
+    (aliasKeyFromSourceSingular ? globalAliases[aliasKeyFromSourceSingular] : null) ||
+    null;
   if (aliasFromRaw?.productId) {
     const product = productsById.get(aliasFromRaw.productId) || null;
     if (product) {
@@ -616,20 +980,26 @@ const resolveParsedLineToItem = (parsedLine, clientId) => {
 
       if (aliasFromRaw.unitMode || shouldTreatAtadoAsUnitForProduct(product.id, parsedLine)) {
         const count = parseUniCount(String(parsedLine.raw || parsedLine.name || ""));
-        return {
+        return finalizeResolvedItem({
           productId: product.id,
           name: product.name,
           unit,
           quantity,
           quantityText: count ? `${count} uni` : parsedLine.quantityText,
           unitMode: true,
-          variant: normalizeCitrusUnit(product.id, preferred.variant || ""),
+          variant: getUiVariantLabel(
+            product,
+            normalizeCitrusUnit(product.id, coerceSpecialVariant(product, preferred.variant || "", unit))
+          ),
           comment: effectiveComment,
           importOrder: parsedLine.importOrder,
-        };
+        });
       }
 
-      const resolvedVariant = normalizeCitrusUnit(product.id, preferred.variant || "");
+      const resolvedVariant = normalizeCitrusUnit(
+        product.id,
+        coerceSpecialVariant(product, preferred.variant || "", unit)
+      );
       const normalizedVariant = normalizeVariantForSheetMatch(resolvedVariant);
       const resolved = applyBusinessUnitAndQuantityRules({
         productId: product.id,
@@ -639,16 +1009,16 @@ const resolveParsedLineToItem = (parsedLine, clientId) => {
         parsedLine,
         unitExplicit: preferred.unitExplicit,
       });
-      return {
+      return finalizeResolvedItem({
         productId: product.id,
         name: product.name,
         unit: resolved.unit,
         quantity: resolved.quantity,
         unitMode: false,
-        variant: normalizedVariant ? resolvedVariant : "",
+        variant: normalizedVariant ? resolvedVariant : getUiVariantLabel(product, resolvedVariant),
         comment: effectiveComment,
         importOrder: parsedLine.importOrder,
-      };
+      });
     }
   }
 
@@ -670,6 +1040,12 @@ const resolveParsedLineToItem = (parsedLine, clientId) => {
       let unit = String(parsedLine.unit || normalizedDirect?.unit || product.defaultUnit || "").trim();
       let quantity = Number(parsedLine.quantity || 0);
       let variant = String(normalizedDirect?.variant || parsedLine.variant || "").trim();
+      if (!variant) {
+        const fallbackVariant = pickColorVariantFromTokens(product, getSourceTokens());
+        if (fallbackVariant) {
+          variant = fallbackVariant;
+        }
+      }
       let unitExplicit = Boolean(parsedLine.unit || normalizedDirect?.unit);
 
       if (!unitExplicit && clientId) {
@@ -689,20 +1065,23 @@ const resolveParsedLineToItem = (parsedLine, clientId) => {
 
       if (shouldTreatAtadoAsUnitForProduct(product.id, parsedLine)) {
         const count = parseUniCount(String(parsedLine.raw || parsedLine.name || ""));
-        return {
+        return finalizeResolvedItem({
           productId: product.id,
           name: product.name,
           unit,
           quantity,
           quantityText: count ? `${count} uni` : parsedLine.quantityText,
           unitMode: true,
-          variant: normalizeCitrusUnit(product.id, variant),
+          variant: getUiVariantLabel(
+            product,
+            normalizeCitrusUnit(product.id, coerceSpecialVariant(product, variant, unit))
+          ),
           comment: effectiveComment,
           importOrder: parsedLine.importOrder,
-        };
+        });
       }
 
-      const resolvedVariant = normalizeCitrusUnit(product.id, variant);
+      const resolvedVariant = normalizeCitrusUnit(product.id, coerceSpecialVariant(product, variant, unit));
       const normalizedVariant = normalizeVariantForSheetMatch(resolvedVariant);
       const resolved = applyBusinessUnitAndQuantityRules({
         productId: product.id,
@@ -713,16 +1092,124 @@ const resolveParsedLineToItem = (parsedLine, clientId) => {
         unitExplicit,
       });
 
-      return {
+      return finalizeResolvedItem({
         productId: product.id,
         name: product.name,
         unit: resolved.unit,
         quantity: resolved.quantity,
         unitMode: false,
-        variant: normalizedVariant ? resolvedVariant : "",
+        variant: normalizedVariant ? resolvedVariant : getUiVariantLabel(product, resolvedVariant),
         comment: effectiveComment,
         importOrder: parsedLine.importOrder,
-      };
+      });
+    }
+  }
+
+  const sourceTokens = getSourceTokens();
+  if (sourceTokens.length) {
+    const productMatches = [];
+    productsById.forEach((product) => {
+      const productTokens = splitLookupTokens(product.name || product.id || "");
+      if (!productTokens.length) {
+        return;
+      }
+      const matchesAll = productTokens.every((keyToken) =>
+        sourceTokens.some((token) => tokenMatchesKey(token, keyToken))
+      );
+      if (matchesAll) {
+        productMatches.push({
+          value: product,
+          score: productTokens.join("").length,
+        });
+      }
+    });
+
+    const matchedProduct = pickUniqueBestMatch(productMatches);
+    if (matchedProduct) {
+      const variantMatches = [];
+      (matchedProduct.variants || []).forEach((variant) => {
+        const variantTokens = splitLookupTokens(variant);
+        if (!variantTokens.length) {
+          return;
+        }
+        const matchesAll = variantTokens.every((keyToken) =>
+          sourceTokens.some((token) => tokenMatchesKey(token, keyToken))
+        );
+        if (matchesAll) {
+          variantMatches.push({ value: variant, score: variantTokens.join("").length });
+        }
+      });
+
+      let matchedVariant = pickUniqueBestMatch(variantMatches) || "";
+      if (!matchedVariant) {
+        const fallbackVariant = pickColorVariantFromTokens(matchedProduct, sourceTokens);
+        if (fallbackVariant) {
+          matchedVariant = fallbackVariant;
+        }
+      }
+      let unit = String(parsedLine.unit || matchedProduct.defaultUnit || "").trim();
+      let quantity = Number(parsedLine.quantity || 0);
+      let variant = String(matchedVariant || parsedLine.variant || "").trim();
+      let unitExplicit = Boolean(parsedLine.unit);
+
+      if (!unitExplicit && clientId) {
+        const preferred = getMostRecentComboForClient(matchedProduct.id, clientId) ||
+          getPreferredPreset(matchedProduct.id);
+        if (preferred?.unit) {
+          unit = String(preferred.unit || "").trim() || unit;
+          unitExplicit = true;
+        }
+        if (!variant && preferred?.variant) {
+          variant = String(preferred.variant || "").trim();
+        }
+      }
+
+      if (shouldForceUnitMode(matchedProduct.id, unitModeProducts)) {
+        unit = "Unidad";
+      }
+
+      if (shouldTreatAtadoAsUnitForProduct(matchedProduct.id, parsedLine)) {
+        const count = parseUniCount(String(parsedLine.raw || parsedLine.name || ""));
+        return finalizeResolvedItem({
+          productId: matchedProduct.id,
+          name: matchedProduct.name,
+          unit,
+          quantity,
+          quantityText: count ? `${count} uni` : parsedLine.quantityText,
+          unitMode: true,
+          variant: getUiVariantLabel(
+            matchedProduct,
+            normalizeCitrusUnit(matchedProduct.id, coerceSpecialVariant(matchedProduct, variant, unit))
+          ),
+          comment: effectiveComment,
+          importOrder: parsedLine.importOrder,
+        });
+      }
+
+      const resolvedVariant = normalizeCitrusUnit(
+        matchedProduct.id,
+        coerceSpecialVariant(matchedProduct, variant, unit)
+      );
+      const normalizedVariant = normalizeVariantForSheetMatch(resolvedVariant);
+      const resolved = applyBusinessUnitAndQuantityRules({
+        productId: matchedProduct.id,
+        product: matchedProduct,
+        unit,
+        quantity,
+        parsedLine,
+        unitExplicit,
+      });
+
+      return finalizeResolvedItem({
+        productId: matchedProduct.id,
+        name: matchedProduct.name,
+        unit: resolved.unit,
+        quantity: resolved.quantity,
+        unitMode: false,
+        variant: normalizedVariant ? resolvedVariant : getUiVariantLabel(matchedProduct, resolvedVariant),
+        comment: effectiveComment,
+        importOrder: parsedLine.importOrder,
+      });
     }
   }
 
@@ -730,29 +1217,32 @@ const resolveParsedLineToItem = (parsedLine, clientId) => {
 };
 
 const initApp = async () => {
-  recoverAllAliasesFromStorage();
   try {
-    const serverAliases = await ordersApi.loadAliases();
-    const payload = {
-      version: "aliases-v1",
-      exportedAt: new Date().toISOString(),
-      data: serverAliases?.data || {},
-    };
-    importAliasesDump(JSON.stringify(payload));
-  } catch (error) {
-    console.warn("No se pudieron cargar alias desde el server:", error);
-  }
-  // Load sheet values (headers + rows)
-  const data = await ordersApi.loadOrdersSheetValues();
-  const values = Array.isArray(data.values) ? data.values : [];
-  sheetHeaders = values[0] || [];
-  rawProducts = values[0] || [];
+    recoverAllAliasesFromStorage();
+    try {
+      const serverAliases = await ordersApi.loadAliases();
+      const payload = {
+        version: "aliases-v1",
+        exportedAt: new Date().toISOString(),
+        data: serverAliases?.data || {},
+      };
+      importAliasesDump(JSON.stringify(payload));
+    } catch (error) {
+      console.warn("No se pudieron cargar alias desde el server:", error);
+    }
+    await syncAliasesToServer();
+    // Load sheet values (headers + rows)
+    const data = await ordersApi.loadOrdersSheetValues();
+    const values = Array.isArray(data.values) ? data.values : [];
+    sheetHeaders = values[0] || [];
+    rawProducts = values[0] || [];
 
   // Build products from headers (skip date/client columns and empty headers)
   const productHeaders = (Array.isArray(rawProducts) ? rawProducts.slice(2) : [])
     .filter((header) => String(header ?? "").trim());
   products = buildProductsFromHeaders(productHeaders);
   productsById = new Map((products || []).map((p) => [String(p.id), p]));
+  sheetColumnResolver = buildSheetColumnResolverFromHeaders(sheetHeaders, productsById);
 
   const productState = new Map();
   const cardByProductId = new Map();
@@ -992,6 +1482,66 @@ const initApp = async () => {
     layoutController.scheduleMasonryUpdate();
   };
 
+  updateTareasPdfButton?.addEventListener("click", async () => {
+    if (!updateTareasPdfButton || updateTareasPdfButton.disabled) {
+      return;
+    }
+    updateTareasPdfButton.disabled = true;
+    setSaveStatusMessage("Generando tareas.pdf...");
+    try {
+      const response = await fetch("/api/tareas/pdf");
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || "Error al generar tareas.pdf");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "tareas.pdf";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setSaveStatusMessage("tareas.pdf actualizado.", "success");
+    } catch (error) {
+      console.error(error);
+      setSaveStatusMessage("No se pudo generar tareas.pdf.", "error");
+    } finally {
+      updateTareasPdfButton.disabled = false;
+    }
+  });
+
+  updateImprimirPedidosButton?.addEventListener("click", async () => {
+    if (!updateImprimirPedidosButton || updateImprimirPedidosButton.disabled) {
+      return;
+    }
+    updateImprimirPedidosButton.disabled = true;
+    setSaveStatusMessage("Generando imprimir pedidos...");
+    try {
+      const response = await fetch("/api/imprimir-pedidos/pdf");
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || "Error al generar imprimir pedidos");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "imprimir-pedidos.pdf";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setSaveStatusMessage("imprimir pedidos actualizado.", "success");
+    } catch (error) {
+      console.error(error);
+      setSaveStatusMessage("No se pudo generar imprimir pedidos.", "error");
+    } finally {
+      updateImprimirPedidosButton.disabled = false;
+    }
+  });
+
   const syncPasteToggleVisibility = () => {
     if (!pasteOrderToggle) {
       return;
@@ -1060,49 +1610,8 @@ const initApp = async () => {
       productsById,
     });
     importBoxController.updateImportUiState();
+    importBoxController.processPasteText?.();
     refreshImportUiForClient();
-  });
-
-  const setAliasRecoveryStatus = (text, isError = false) => {
-    if (!aliasRecoveryStatus) {
-      return;
-    }
-    aliasRecoveryStatus.textContent = String(text || "").trim();
-    aliasRecoveryStatus.classList.toggle("is-error", Boolean(isError));
-  };
-
-  aliasRecoveryExportButton?.addEventListener("click", () => {
-    const result = exportAliasesDump();
-    if (aliasRecoveryInput) {
-      aliasRecoveryInput.value = result.json || "";
-    }
-    if (!result.count) {
-      setAliasRecoveryStatus("No se encontraron alias para exportar.");
-      return;
-    }
-    setAliasRecoveryStatus(`Exportados ${result.count} alias (${result.clients.length} clientes).`);
-  });
-
-  aliasRecoveryImportButton?.addEventListener("click", () => {
-    const payload = aliasRecoveryInput?.value || "";
-    const result = importAliasesDump(payload, { clientId: clientSelect?.value });
-    if (result.error === "empty") {
-      setAliasRecoveryStatus("Pegue un JSON de alias para importar.", true);
-      return;
-    }
-    if (result.error === "invalid") {
-      setAliasRecoveryStatus("JSON invalido. Verifique el contenido.", true);
-      return;
-    }
-    recoverAllAliasesFromStorage();
-    refreshImportUiForClient();
-    try {
-      const payload = JSON.parse(exportAliasesDump().json || "{}");
-      ordersApi.saveAliases({ data: payload.data || {} });
-    } catch (error) {
-      console.warn("No se pudieron guardar alias en el server:", error);
-    }
-    setAliasRecoveryStatus(`Importados ${result.imported} alias (${result.clients.length} clientes).`);
   });
 
   const aliasPreview = document.querySelector("#alias-preview");
@@ -1217,9 +1726,13 @@ const initApp = async () => {
     hideLoadingCurtain();
   };
 
-  init();
+    init();
 
-  window.__APP = { products, productsById, sheetHeaders, rawProducts, productState };
+    window.__APP = { products, productsById, sheetHeaders, rawProducts, productState };
+  } catch (error) {
+    console.error("initApp failed:", error);
+    hideLoadingCurtain();
+  }
 };
 
 initApp();

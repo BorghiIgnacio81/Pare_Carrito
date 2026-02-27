@@ -31,6 +31,14 @@
         </div>
 
         <div class="client-select client-select--top">
+          <div class="client-select__top-action">
+            <button id="update-tareas-pdf" type="button" class="button-secondary">
+              Actualizar tareas.pdf
+            </button>
+            <button id="update-imprimir-pedidos" type="button" class="button-secondary">
+              Actualizar imprimir pedidos
+            </button>
+          </div>
           <label for="client-select">Cliente</label>
           <div class="client-select__row">
             <select id="client-select">
@@ -74,6 +82,7 @@
         </div>
 
         <p id="save-status" class="save-status" aria-live="polite"></p>
+
       </div>
     </header>
 
@@ -178,22 +187,6 @@
               </div>
             </div>
 
-            <div class="alias-recovery">
-              <h5>Recuperar alias</h5>
-              <p>Pegue el JSON exportado desde el origen anterior para recuperar todo.</p>
-              <textarea
-                id="alias-recovery-input"
-                rows="4"
-                placeholder="Pegue aqui el JSON de alias..."
-              ></textarea>
-              <div class="actions actions--left">
-                <button id="alias-recovery-import" type="button">Importar alias</button>
-                <button id="alias-recovery-export" type="button" class="button-secondary">
-                  Exportar alias
-                </button>
-              </div>
-              <p id="alias-recovery-status" class="alias-recovery__status"></p>
-            </div>
           </div>
         </div>
 

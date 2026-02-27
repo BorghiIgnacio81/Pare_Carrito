@@ -121,6 +121,8 @@ export const createSummaryController = ({
       const li = document.createElement("li");
       const warningKey = `${item.productId}__${item.unit || ""}__${item.variant || ""}`;
       const isWarn = warningKeys && warningKeys.has(warningKey);
+      const repeatCount = Number(item.importCount || 0);
+      const repeatText = repeatCount > 1 ? ` (${repeatCount})` : "";
       const quantityText = item.unitMode
         ? item.quantityText || "(sin cantidad)"
         : item.quantity
@@ -134,7 +136,7 @@ export const createSummaryController = ({
           ? "Kg"
           : ` ${item.unit}`
         : " (sin unidad)";
-      li.textContent = `${isWarn ? "⚠️ " : ""}${item.productName}${variantText} - ${quantityText}${unitText}`;
+      li.textContent = `${isWarn ? "⚠️ " : ""}${item.productName}${variantText}${repeatText} - ${quantityText}${unitText}`;
       if (isWarn) {
         li.classList.add("summary-warning");
       }

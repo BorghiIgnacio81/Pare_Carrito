@@ -11,7 +11,10 @@ export const normalizeAliasKey = (value) => {
   const cleaned = normalizeSpaces(String(value ?? ""))
     .replace(/[\.,;:!\?]+/g, " ")
     .replace(/[()\[\]{}]/g, " ");
-  return slugify(cleaned);
+  const withoutDiacritics = cleaned
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+  return slugify(withoutDiacritics);
 };
 
 export const globalAliases = {
@@ -25,7 +28,24 @@ export const globalAliases = {
   [normalizeAliasKey("raiz jengibre")]: { productId: "jengibre" },
   [normalizeAliasKey("raices de jengibre")]: { productId: "jengibre" },
   [normalizeAliasKey("raices jengibre")]: { productId: "jengibre" },
+  [normalizeAliasKey("gengibre")]: { productId: "jengibre" },
   [normalizeAliasKey("cherry")]: { productId: "tomate", variant: "Cherry", unit: "Kg" },
+  [normalizeAliasKey("zapallityo")]: { productId: "zapallito" },
+  [normalizeAliasKey("zapallityo verde")]: { productId: "zapallito" },
+  [normalizeAliasKey("limon 1/2 cajon")]: { productId: "limon", unit: "Jaula" },
+  [normalizeAliasKey("limon 1/2 cajon.")]: { productId: "limon", unit: "Jaula" },
+  [normalizeAliasKey("limon medio cajon")]: { productId: "limon", unit: "Jaula" },
+  [normalizeAliasKey("limon medio cajon.")]: { productId: "limon", unit: "Jaula" },
+  [normalizeAliasKey("1/2 cajon limon")]: { productId: "limon", unit: "Jaula" },
+  [normalizeAliasKey("1/2 cajon de limon")]: { productId: "limon", unit: "Jaula" },
+  [normalizeAliasKey("medio cajon limon")]: { productId: "limon", unit: "Jaula" },
+  [normalizeAliasKey("medio cajon de limon")]: { productId: "limon", unit: "Jaula" },
+  [normalizeAliasKey("rucula")]: { productId: "rucula", unit: "Atado" },
+  [normalizeAliasKey("rúcula")]: { productId: "rucula", unit: "Atado" },
+  [normalizeAliasKey("cebolla verdeo")]: { productId: "verdeo", unit: "Atado" },
+  [normalizeAliasKey("lech repollada")]: { productId: "lechuga", variant: "Repollada", unit: "Unidad" },
+  [normalizeAliasKey("lechuga repollada")]: { productId: "lechuga", variant: "Repollada", unit: "Unidad" },
+  [normalizeAliasKey("palta")]: { productId: "palta" },
 };
 
 const normalizeClientId = (value) => {

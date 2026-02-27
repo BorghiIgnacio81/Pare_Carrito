@@ -268,4 +268,4 @@ Estimativo: **(12–30 hs)**
 ## 12) Tiempo
 - **Hoy (2026-02-20):** 01:32 (contador en curso; todavía no consolidado en el acumulado)
 - **Hoy (2026-02-20, estimación híbrida por actividad VS Code):** 00:30
-- **Acumulado del proyecto (estimación híbrida: historial VS Code + worklog manual):** 32:20
+- **Acumulado del proyecto (estimación híbrida: historial VS Code + worklog manual, recalculado al 2026-02-26):** 45:30

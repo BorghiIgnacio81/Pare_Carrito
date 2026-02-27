@@ -14,6 +14,9 @@ export const buildSheetColumnResolverFromHeaders = (headers, productsById) => {
     if (!pid || !u) {
       return [];
     }
+    if ((pid === "limon" || pid === "naranja" || pid === "pomelo") && (u === "Cajón" || u === "Bolsa")) {
+      return ["Jaula"];
+    }
     // Compatibilidad histórica: Remolacha se carga en una columna "Kg" del Sheet,
     // pero en UI se vende por Atado. Permitimos mapear Atado -> Kg.
     if (pid === "remolacha" && u === "Atado") {

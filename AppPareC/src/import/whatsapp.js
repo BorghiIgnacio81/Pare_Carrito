@@ -14,6 +14,9 @@ const normalizeOrderLine = (value) => {
   return raw
     .replace(/^[\-*•]+\s*/g, "")
     .replace(/^\d+\s*[\.|\)]\s*/g, "")
+    .replace(/([^\d])\.(?=[^\d])/g, "$1 ")
+    .replace(/([^\d])\.(?=\s*\d)/g, "$1 ")
+    .replace(/\.(?=\s*$)/g, " ")
     .replace(/[;,]+$/g, "")
     .trim();
 };
@@ -70,6 +73,7 @@ export const parseQuantityUnitAndName = (value, customUnitSynonyms = unitSynonym
 
   const { text: withoutComment, comment } = extractTrailingComment(raw);
   let working = normalizeSpaces(withoutComment);
+  working = working.replace(/(\d)\s*[kK]\b/g, "$1 k");
   if (!working) {
     return null;
   }
@@ -127,9 +131,49 @@ export const parseQuantityUnitAndName = (value, customUnitSynonyms = unitSynonym
     };
   }
 
-  const trailingNormalized = normalizeSpaces(working.replace(/(\d)([a-zA-ZñÑ]+)/g, "$1 $2"));
+  const trailingNormalized = normalizeSpaces(working.replace(/(\d)([\p{L}]+)/gu, "$1 $2"));
+  const unitBeforeMatch = trailingNormalized.match(
+    /^(.*?)(?:\s+)([\p{L}]+)\s+(\d+(?:[\.,]\d+)?|\d+\s*\/\s*\d+)$/u
+  );
+  if (unitBeforeMatch) {
+    const namePart = normalizeSpaces(unitBeforeMatch[1]);
+    if (!namePart) {
+      return null;
+    }
+
+    let quantity = parseFractionOrNumber(unitBeforeMatch[3]);
+    if (quantity == null) {
+      return null;
+    }
+
+    let unit = "";
+    const unitText = normalizeSpaces(unitBeforeMatch[2]);
+    const unitSynonym = (customUnitSynonyms || []).find((pattern) => pattern.regex.test(unitText));
+    if (unitSynonym) {
+      unit = unitSynonym.unit;
+    }
+    if (!unit) {
+      unit = detectUnit(unitText);
+    }
+
+    if (unit === "Gr") {
+      quantity /= 1000;
+      unit = "Kg";
+    }
+
+    const unitMode = unit === "Unidad";
+    return {
+      quantity,
+      unit,
+      name: namePart,
+      raw,
+      quantityText: unitMode ? `${quantity} uni` : "",
+      unitMode,
+      commentFromText: comment,
+    };
+  }
   const trailingMatch = trailingNormalized.match(
-    /^(.*?)(?:\s+)(\d+(?:[\.,]\d+)?|\d+\s*\/\s*\d+)\s*([a-zA-ZñÑ]+)?$/
+    /^(.*?)(?:\s+)(\d+(?:[\.,]\d+)?|\d+\s*\/\s*\d+)\s*([\p{L}]+)?$/u
   );
   if (!trailingMatch) {
     return null;
@@ -203,9 +247,11 @@ export const aggregateItems = (items, normalizeVariantForSheetMatch) => {
     const key = `${productId}__${unit}__${variant}`;
     const current = map.get(key);
     if (!current) {
-      map.set(key, { ...item });
+      map.set(key, { ...item, importCount: 1 });
       return;
     }
+
+    current.importCount = Number(current.importCount || 1) + 1;
 
     const aOrder = Number(current.importOrder);
     const bOrder = Number(item.importOrder);

@@ -22,7 +22,13 @@ export const createImportApplier = ({
       product,
       String(item.unit || product.defaultUnit || "").trim()
     );
-    const desiredVariant = coerceVariantForProduct(product, item.variant);
+    let desiredVariant = coerceVariantForProduct(product, item.variant);
+    if (!desiredVariant && Array.isArray(product.variants) && product.variants.length) {
+      const commonLabel = product.variantLabelByKey?.[""];
+      if (commonLabel && product.variants.includes(commonLabel)) {
+        desiredVariant = commonLabel;
+      }
+    }
 
     const findRow = () => {
       const currentRows = Array.from(card.querySelectorAll(".variant-row"));

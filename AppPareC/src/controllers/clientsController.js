@@ -239,6 +239,11 @@ export const createClientsController = ({
     if (editClientButton) {
       editClientButton.disabled = !clientSelect?.value;
     }
+    if (clientSelect && editClientButton) {
+      clientSelect.addEventListener("change", () => {
+        editClientButton.disabled = !clientSelect?.value;
+      });
+    }
 
     wireEditClient();
     wireNewClient();
