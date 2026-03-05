@@ -40,6 +40,7 @@ import {
 } from "./src/ui/aliasForm.js";
 import { createOrdersApi } from "./src/services/ordersApi.js";
 import { createClientsController } from "./src/controllers/clientsController.js";
+import { createResponsiblesController } from "./src/controllers/responsiblesController.js";
 import { createOrderController } from "./src/controllers/orderController.js";
 import { createAliasesController } from "./src/controllers/aliasesController.js";
 import { createCatalogController } from "./src/controllers/catalogController.js";
@@ -85,6 +86,12 @@ const summaryClient = document.querySelector("#summary-client");
 const saveStatus = document.querySelector("#save-status");
 const editClientButton = document.querySelector("#edit-client");
 const newClientButton = document.querySelector("#new-client");
+const responsibleSelect = document.querySelector("#responsible-select");
+const newResponsibleButton = document.querySelector("#new-responsible");
+const editResponsibleButton = document.querySelector("#edit-responsible");
+const assignResponsibleButton = document.querySelector("#assign-responsible");
+const removeResponsibleButton = document.querySelector("#remove-responsible");
+const responsibleAssignmentStatus = document.querySelector("#responsible-assignment-status");
 
 const saveConfirmModal = document.querySelector("#save-confirm-modal");
 const saveConfirmMessage = document.querySelector("#save-confirm-message");
@@ -384,6 +391,22 @@ const applyBusinessUnitAndQuantityRules = ({
     }
   }
 
+  const isSandia =
+    pid === "sandia" ||
+    pid === "sandía" ||
+    /\bsand[ií]a(s)?\b/.test(productName) ||
+    /\bsand[ií]a(s)?\b/.test(raw);
+  if (isSandia && !isUnitExplicitFromText) {
+    const mentionsHalf = /\bmedia\b|\bmedio\b|\bmitad\b/i.test(raw);
+    if (mentionsHalf) {
+      nextQuantity = 0.5;
+      if (!nextUnit) {
+        nextUnit = "Unidad";
+      }
+      return { unit: nextUnit, quantity: nextQuantity };
+    }
+  }
+
   const productHasDocena =
     (Array.isArray(product?.units) && product.units.includes("Docena")) ||
     String(product?.defaultUnit || "") === "Docena";
@@ -451,7 +474,9 @@ const shouldTreatAtadoAsUnitForProduct = (productId, parsedLine) => {
   const pid = String(productId || "").trim().toLowerCase();
   const parsedUnit = String(parsedLine?.unit || "").trim();
   if (!pid || !parsedUnit) {
-    return false;
+    // Regla de negocio: en calabaza, si el cliente no escribe unidad,
+    // lo interpretamos como unidades (ej: "2 calabaza" => "2 uni").
+    return pid === "calabaza" && !parsedUnit;
   }
   // Regla de negocio: en lechugas, "atado" se interpreta como unidad.
   return pid === "lechuga" && parsedUnit === "Atado";
@@ -523,6 +548,47 @@ const resolveParsedLineToItem = (parsedLine, clientId) => {
     return comunVariant || variant;
   };
 
+  const coerceLechugaVariant = (product, variant) => {
+    if (!product || product.id !== "lechuga") {
+      return variant;
+    }
+    const variants = Array.isArray(product.variants) ? product.variants.filter(Boolean) : [];
+    if (!variants.length) {
+      return variant;
+    }
+
+    const findVariant = (key) =>
+      variants.find((value) => normalizeTokenText(value) === key) || "";
+
+    const combined = `${parsedLine.raw || ""} ${parsedLine.name || ""} ${parsedLine.commentFromText || ""}`;
+    const tokens = tokenizeText(combined);
+    const hasMoradaHint = tokens.some((token) => token.startsWith("morad"));
+    const hasHydroHint = tokens.some((token) => token.startsWith("hidro"));
+
+    const moradaVariant = findVariant("morada") || findVariant("morado");
+    const hidroVariant = findVariant("hidroponica");
+    const comunVariant = findVariant("comun");
+
+    if (hasMoradaHint && moradaVariant) {
+      return moradaVariant;
+    }
+    if (hasHydroHint && hidroVariant) {
+      return hidroVariant;
+    }
+
+    const normalizedIncoming = normalizeTokenText(variant);
+    if (normalizedIncoming === "morado" && moradaVariant) {
+      return moradaVariant;
+    }
+
+    // Evitar que una preferencia histórica (ej: Hidropónica) pise una línea que no la menciona.
+    if (!hasHydroHint && normalizedIncoming === "hidroponica") {
+      return comunVariant || "";
+    }
+
+    return variant;
+  };
+
   const coercePaltaVariant = (product, variant) => {
     if (!product || product.id !== "palta") {
       return variant;
@@ -582,7 +648,8 @@ const resolveParsedLineToItem = (parsedLine, clientId) => {
 
   const coerceSpecialVariant = (product, variant, unit) => {
     const ruculaVariant = coerceRuculaVariant(product, variant);
-    const paltaVariant = coercePaltaVariant(product, ruculaVariant);
+    const lechugaVariant = coerceLechugaVariant(product, ruculaVariant);
+    const paltaVariant = coercePaltaVariant(product, lechugaVariant);
     return coerceTomateVariant(product, paltaVariant, unit);
   };
 
@@ -721,7 +788,7 @@ const resolveParsedLineToItem = (parsedLine, clientId) => {
         unitExplicit: true,
       };
     }
-    if (!variant && preferred?.variant) {
+    if (!variant && preferred?.variant && product.id !== "lechuga") {
       return { unit, variant: String(preferred.variant || "").trim(), unitExplicit };
     }
     return { unit, variant, unitExplicit };
@@ -1054,7 +1121,7 @@ const resolveParsedLineToItem = (parsedLine, clientId) => {
           unit = String(preferred.unit || "").trim() || unit;
           unitExplicit = true;
         }
-        if (!variant && preferred?.variant) {
+        if (!variant && preferred?.variant && product.id !== "lechuga") {
           variant = String(preferred.variant || "").trim();
         }
       }
@@ -1159,7 +1226,7 @@ const resolveParsedLineToItem = (parsedLine, clientId) => {
           unit = String(preferred.unit || "").trim() || unit;
           unitExplicit = true;
         }
-        if (!variant && preferred?.variant) {
+        if (!variant && preferred?.variant && matchedProduct.id !== "lechuga") {
           variant = String(preferred.variant || "").trim();
         }
       }
@@ -1398,6 +1465,17 @@ const initApp = async () => {
     normalizeSpaces,
   });
 
+  const responsiblesController = createResponsiblesController({
+    responsibleSelect,
+    newResponsibleButton,
+    editResponsibleButton,
+    assignResponsibleButton,
+    removeResponsibleButton,
+    assignmentStatus: responsibleAssignmentStatus,
+    clientSelect,
+    ordersApi,
+  });
+
   const importApplier = createImportApplier({
     getProductsById: () => productsById,
     getCardByProductId: () => cardByProductId,
@@ -1489,21 +1567,19 @@ const initApp = async () => {
     updateTareasPdfButton.disabled = true;
     setSaveStatusMessage("Generando tareas.pdf...");
     try {
-      const response = await fetch("/api/tareas/pdf");
+      const response = await fetch("/api/tareas/pdf?saveInProject=1");
       if (!response.ok) {
         const message = await response.text();
         throw new Error(message || "Error al generar tareas.pdf");
       }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "tareas.pdf";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setSaveStatusMessage("tareas.pdf actualizado.", "success");
+      const data = await response.json();
+      const savedPath = String(data?.savedAt?.filePath || "");
+      setSaveStatusMessage(
+        savedPath
+          ? `tareas.pdf guardado en: ${savedPath}`
+          : "tareas.pdf actualizado.",
+        "success"
+      );
     } catch (error) {
       console.error(error);
       setSaveStatusMessage("No se pudo generar tareas.pdf.", "error");
@@ -1519,21 +1595,19 @@ const initApp = async () => {
     updateImprimirPedidosButton.disabled = true;
     setSaveStatusMessage("Generando imprimir pedidos...");
     try {
-      const response = await fetch("/api/imprimir-pedidos/pdf");
+      const response = await fetch("/api/imprimir-pedidos/pdf?saveInProject=1");
       if (!response.ok) {
         const message = await response.text();
         throw new Error(message || "Error al generar imprimir pedidos");
       }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "imprimir-pedidos.pdf";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setSaveStatusMessage("imprimir pedidos actualizado.", "success");
+      const data = await response.json();
+      const savedPath = String(data?.savedAt?.filePath || "");
+      setSaveStatusMessage(
+        savedPath
+          ? `imprimir pedidos guardado en: ${savedPath}`
+          : "imprimir pedidos actualizado.",
+        "success"
+      );
     } catch (error) {
       console.error(error);
       setSaveStatusMessage("No se pudo generar imprimir pedidos.", "error");
@@ -1556,6 +1630,9 @@ const initApp = async () => {
 
   clientSelect?.addEventListener("change", () => {
     refreshImportUiForClient();
+    responsiblesController.refreshForClient(String(clientSelect?.value || "")).catch((error) => {
+      console.warn("responsiblesController refreshForClient failed:", error);
+    });
     syncPasteToggleVisibility();
     try {
       importBoxController.updateImportUiState();
@@ -1713,6 +1790,11 @@ const initApp = async () => {
       importBoxController.init();
     } catch (err) {
       console.warn("importBoxController init failed:", err);
+    }
+    try {
+      await responsiblesController.init();
+    } catch (err) {
+      console.warn("responsiblesController init failed:", err);
     }
     syncPasteToggleVisibility();
     try {

@@ -9,17 +9,35 @@ param(
     [double]$Minutes,
     [int]$BreakMinutes = 0,
     [string]$Note = "",
+    [string]$StartAt,
 
     # Optional: adjust running session by inactivity in the workspace.
     [string]$WorkspaceRoot = (Get-Location).Path,
     [string]$VsCodeAppData = "$env:APPDATA\\Code",
     [int]$InactivityGapMinutes = 0,
 
+    [double]$TargetHours = 52,
+    [string]$ConfigPath = (Join-Path (Join-Path (Get-Location).Path 'scripts') 'time-tracking.config.json'),
+
     [string]$File = (Join-Path (Get-Location).Path 'worklog.csv')
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+$metricsModulePath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'modules\worklogMetrics.ps1'
+if (Test-Path -LiteralPath $metricsModulePath) {
+    . $metricsModulePath
+}
+
+$trackingConfig = if (Get-Command Read-TimeTrackingConfig -ErrorAction SilentlyContinue) {
+    Read-TimeTrackingConfig -configPath $ConfigPath
+} else {
+    $null
+}
+if ($trackingConfig -and $trackingConfig.targetHours -ne $null -and -not $PSBoundParameters.ContainsKey('TargetHours')) {
+    $TargetHours = [double]$trackingConfig.targetHours
+}
 
 function Parse-Date([string]$s) {
     if (-not $s -or $s.Trim() -eq '') { throw 'Date is required (YYYY-MM-DD or DD/MM/YYYY).' }
@@ -249,19 +267,49 @@ function Get-AdjustedMinutesFromInactivity([datetime]$sessionStart, [datetime]$n
 switch ($Command) {
     'status' {
         $r = Read-Running -path $runningPath
+        $loggedMinutes = if (Get-Command Get-CanonicalLoggedMinutes -ErrorAction SilentlyContinue) {
+            Get-CanonicalLoggedMinutes -filePath $File -config $trackingConfig
+        } else {
+            0.0
+        }
+        $targetMinutes = [math]::Round($TargetHours * 60, 1)
+
         if (-not $r) {
             Write-Host 'No running session.'
+            $latest = if (Get-Command Get-LatestEntry -ErrorAction SilentlyContinue) {
+                Get-LatestEntry -filePath $File
+            } else {
+                $null
+            }
+            if ($latest) {
+                Write-Host ("Last entry: Date={0} Start={1} End={2} NetMinutes={3} Note={4}" -f [string]$latest.Date, [string]$latest.Start, [string]$latest.End, [string]$latest.NetMinutes, [string]$latest.Note)
+            }
+            if (Get-Command Format-Minutes -ErrorAction SilentlyContinue) {
+                Write-Host ("Total logged: {0} min ({1})" -f $loggedMinutes, (Format-Minutes -minutes $loggedMinutes))
+                Write-Host ("Target {0}h: {1} min. Remaining: {2} min" -f $TargetHours, $targetMinutes, [math]::Round($targetMinutes - $loggedMinutes, 1))
+            } else {
+                Write-Host ("Total logged: {0} min" -f $loggedMinutes)
+            }
             return
         }
 
         $sessionStart = [datetime]::ParseExact([string]$r.Start, 'yyyy-MM-dd HH:mm:ss', $null)
         $now = Get-Date
         $calc = Get-AdjustedMinutesFromInactivity -sessionStart $sessionStart -now $now -gapMinutes $InactivityGapMinutes -workspaceRoot $WorkspaceRoot
+        $runningMinutes = if ($calc.Adjusted) { [double]$calc.AdjustedMinutes } else { [double]$calc.RawMinutes }
+        $totalWithRunning = [math]::Round($loggedMinutes + $runningMinutes, 1)
         if ($calc.Adjusted) {
             $wCount = if ($calc.Windows) { $calc.Windows.Count } else { 0 }
             Write-Host ("Running since {0} ({1} min adjusted by inactivity in {2} windows, {3} min raw). Gap: {4} min. Note: {5}" -f $sessionStart, $calc.AdjustedMinutes, $wCount, $calc.RawMinutes, $InactivityGapMinutes, [string]$r.Note)
         } else {
             Write-Host ("Running since {0} ({1} min so far). Note: {2}" -f $sessionStart, $calc.RawMinutes, [string]$r.Note)
+        }
+        if (Get-Command Format-Minutes -ErrorAction SilentlyContinue) {
+            Write-Host ("Total logged (closed): {0} min ({1})" -f $loggedMinutes, (Format-Minutes -minutes $loggedMinutes))
+            Write-Host ("Total with current session: {0} min ({1})" -f $totalWithRunning, (Format-Minutes -minutes $totalWithRunning))
+            Write-Host ("Target {0}h: {1} min. Remaining: {2} min" -f $TargetHours, $targetMinutes, [math]::Round($targetMinutes - $totalWithRunning, 1))
+        } else {
+            Write-Host ("Total with current session: {0} min" -f $totalWithRunning)
         }
         return
     }
@@ -274,9 +322,19 @@ switch ($Command) {
         }
 
         $now = Get-Date
-        Write-Running -path $runningPath -start $now -note $Note
-        Write-Host ("Started: {0}" -f $now.ToString('yyyy-MM-dd HH:mm:ss'))
-        if ($Note -and $Note.Trim() -ne '') { Write-Host ("Note: {0}" -f $Note) }
+        $startTime = $now
+        if ($StartAt -and $StartAt.Trim() -ne '') {
+            [datetime]$parsed = [datetime]::MinValue
+            if (-not [datetime]::TryParse($StartAt, [ref]$parsed)) {
+                throw "Invalid StartAt. Use format yyyy-MM-dd HH:mm"
+            }
+            $startTime = $parsed
+        }
+
+        $noteToStore = if ($Note -and $Note.Trim() -ne '') { $Note } else { "Sesion iniciada manualmente" }
+        Write-Running -path $runningPath -start $startTime -note $noteToStore
+        Write-Host ("Started: {0}" -f $startTime.ToString('yyyy-MM-dd HH:mm:ss'))
+        Write-Host ("Note: {0}" -f $noteToStore)
         return
     }
 
@@ -424,9 +482,18 @@ switch ($Command) {
                 }
             }
 
-        $total = ($rows2 | Measure-Object NetMinutes -Sum).Sum
+        $total = if (Get-Command Get-CanonicalLoggedMinutes -ErrorAction SilentlyContinue) {
+            Get-CanonicalLoggedMinutes -filePath $File -config $trackingConfig
+        } else {
+            ($rows2 | Measure-Object NetMinutes -Sum).Sum
+        }
         Write-Host '--- Manual worklog report (worklog.csv only) ---'
         Write-Host ('Total: {0} minutes ({1} hours)' -f ([math]::Round($total,1)), ([math]::Round($total/60,2)))
+        if (Get-Command Format-Minutes -ErrorAction SilentlyContinue) {
+            Write-Host ('Total HH:mm: {0}' -f (Format-Minutes -minutes ([double]$total)))
+        }
+        $targetMinutes = [math]::Round($TargetHours * 60, 1)
+        Write-Host ('Target {0}h => Remaining: {1} minutes' -f $TargetHours, [math]::Round($targetMinutes - [double]$total, 1))
         Write-Host 'Tip: for project total (VS Code + manual), run: .\scripts\hours_hybrid_report.ps1 -AsCsv'
         Write-Host ''
         Write-Host 'By day:'

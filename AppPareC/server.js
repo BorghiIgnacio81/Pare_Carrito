@@ -5,6 +5,8 @@ import fs from "fs";
 import dotenv from "dotenv";
 import { google } from "googleapis";
 import { fileURLToPath } from "url";
+import { createPdfReportsController } from "./src/controllers/pdfReportsController.js";
+import { createMasterDataController } from "./src/controllers/masterDataController.js";
 
 dotenv.config();
 
@@ -34,6 +36,9 @@ app.use(express.json({ limit: "2mb" }));
 // persists reliably and the app can be opened at http://localhost:<PORT>/
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 app.use(express.static(__dirname));
+
+const TAREAS_PDF_DIR = path.join(__dirname, "TareasPDF");
+const IMPRIMIR_PEDIDOS_PDF_DIR = path.join(__dirname, "ImprimirPedidosPDF");
 
 const ALIASES_PATH = path.join(__dirname, "data", "aliases.json");
 
@@ -155,6 +160,8 @@ const formatDate = (date) => {
   const year = String(date.getFullYear());
   return `${day}/${month}/${year}`;
 };
+
+const dateTokenRegex = /\d{1,2}\s*[\/\.\-／⁄]\s*\d{1,2}\s*[\/\.\-／⁄]\s*\d{2,4}/g;
 
 const isEmptyRow = (row) =>
   !row || row.every((cell) => !String(cell ?? "").trim());
@@ -328,10 +335,93 @@ const fetchDivCompRanges = async () => {
 };
 
 const replaceDateInRows = (rows, dateText) => {
-  const dateRegex = /\b\d{2}\/\d{2}\/\d{4}\b/g;
   return (rows || []).map((row) =>
-    (row || []).map((cell) => String(cell ?? "").replace(dateRegex, dateText))
+    (row || []).map((cell) => String(cell ?? "").replace(dateTokenRegex, dateText))
   );
+};
+
+const dateForFilename = () => {
+  const now = new Date();
+  const yyyy = String(now.getFullYear());
+  const mm = String(now.getMonth() + 1);
+  const dd = String(now.getDate());
+  return `${dd}-${mm}-${yyyy}`;
+};
+
+const legacyDateForFilename = () => {
+  const now = new Date();
+  const yyyy = String(now.getFullYear());
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const savePdfBufferInProject = ({ buffer, folderPath, baseName }) => {
+  const safeBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || "");
+  fs.mkdirSync(folderPath, { recursive: true });
+  const todayDate = dateForFilename();
+  const legacyDate = legacyDateForFilename();
+  const existing = fs.readdirSync(folderPath, { withFileTypes: true });
+  existing.forEach((entry) => {
+    if (!entry.isFile()) {
+      return;
+    }
+    const name = String(entry.name || "");
+    const lower = name.toLowerCase();
+    if (!lower.endsWith(".pdf")) {
+      return;
+    }
+    const isLegacyLatest = lower === `${baseName}.pdf`;
+    const isTodayNamed =
+      lower.startsWith(`${baseName}_`) &&
+      (lower.includes(todayDate.toLowerCase()) || lower.includes(legacyDate.toLowerCase()));
+    if (isLegacyLatest || isTodayNamed) {
+      try {
+        fs.unlinkSync(path.join(folderPath, name));
+      } catch {
+      }
+    }
+  });
+
+  const dailyName = `${baseName}_${todayDate}.pdf`;
+  const filePath = path.join(folderPath, dailyName);
+  fs.writeFileSync(filePath, safeBuffer);
+  return { filePath };
+};
+
+const extractDateTokensFromContent = (content) => {
+  const tokens = new Set();
+  const blocks = Array.isArray(content) ? content : [];
+  blocks.forEach((block) => {
+    const elements = Array.isArray(block?.paragraph?.elements) ? block.paragraph.elements : [];
+    elements.forEach((element) => {
+      const text = String(element?.textRun?.content || "");
+      if (!text) {
+        return;
+      }
+      const matches = text.match(dateTokenRegex) || [];
+      matches.forEach((token) => {
+        const cleaned = String(token || "").trim();
+        if (cleaned) {
+          tokens.add(cleaned);
+        }
+      });
+    });
+  });
+  return Array.from(tokens);
+};
+
+const extractDateTokensFromDocHeaderFooter = (doc) => {
+  const out = new Set();
+  const headers = doc?.data?.headers || {};
+  const footers = doc?.data?.footers || {};
+  Object.values(headers).forEach((section) => {
+    extractDateTokensFromContent(section?.content).forEach((token) => out.add(token));
+  });
+  Object.values(footers).forEach((section) => {
+    extractDateTokensFromContent(section?.content).forEach((token) => out.add(token));
+  });
+  return Array.from(out);
 };
 
 const buildTasksDocumentPayload = ({ part1, part2, part3, part4 }) => {
@@ -348,7 +438,16 @@ const buildTasksDocumentPayload = ({ part1, part2, part3, part4 }) => {
   ];
 
   const separators = "\n\n";
-  const text = parts.join(separators).trim();
+  let text = parts.join(separators).trim();
+  text = text.replace(dateTokenRegex, today);
+
+  const singleDateLineRegex = /^\s*\d{1,2}\s*[\/\.\-／⁄]\s*\d{1,2}\s*[\/\.\-／⁄]\s*\d{2,4}\s*$/;
+  const lines = text.split("\n");
+  const firstDateLineIndex = lines.findIndex((line) => singleDateLineRegex.test(String(line || "")));
+  if (firstDateLineIndex >= 0) {
+    lines[firstDateLineIndex] = today;
+    text = lines.join("\n");
+  }
 
   const lengths = parts.map((part) => part.length);
   const offsets = [];
@@ -412,294 +511,68 @@ const fetchClientNumbersFromTodos = async () => {
   return Array.from(used).sort();
 };
 
-app.get("/api/tareas/pdf", async (req, res) => {
-  try {
-    if (!TASKS_DOC_ID) {
-      res.status(500).send("Missing TAREAS_DOC_ID/TASKS_DOC_ID.");
-      return;
-    }
-
-    const ranges = await fetchDivCompRanges();
-    const payload = buildTasksDocumentPayload(ranges);
-
-    const docs = await getDocsClient();
-    const doc = await docs.documents.get({ documentId: TASKS_DOC_ID });
-    const content = Array.isArray(doc?.data?.body?.content) ? doc.data.body.content : [];
-    const last = content.length ? content[content.length - 1] : null;
-    const endIndex = last?.endIndex ? Number(last.endIndex) : 1;
-
-    const requests = [];
-    if (endIndex > 1) {
-      requests.push({
-        deleteContentRange: {
-          range: { startIndex: 1, endIndex: endIndex - 1 },
-        },
-      });
-    }
-    requests.push({
-      insertText: {
-        location: { index: 1 },
-        text: payload.text,
-      },
-    });
-
-    if (payload.text) {
-      requests.push({
-        updateTextStyle: {
-          range: {
-            startIndex: 1,
-            endIndex: 1 + payload.text.length,
-          },
-          textStyle: { bold: false },
-          fields: "bold",
-        },
-      });
-    }
-
-    payload.boldRanges.forEach((range) => {
-      requests.push({
-        updateTextStyle: {
-          range: {
-            startIndex: 1 + range.start,
-            endIndex: 1 + range.end,
-          },
-          textStyle: { bold: true },
-          fields: "bold",
-        },
-      });
-    });
-
-    await docs.documents.batchUpdate({
-      documentId: TASKS_DOC_ID,
-      requestBody: { requests },
-    });
-
-    const drive = await getDriveClient();
-    const pdf = await drive.files.export(
-      { fileId: TASKS_DOC_ID, mimeType: "application/pdf" },
-      { responseType: "arraybuffer" }
-    );
-
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "attachment; filename=\"tareas.pdf\"");
-    res.status(200).send(Buffer.from(pdf.data));
-  } catch (error) {
-    console.error("/api/tareas/pdf failed:", error);
-    res.status(500).send(String(error?.message || error));
-  }
+const pdfReportsController = createPdfReportsController({
+  getDocsClient,
+  getDriveClient,
+  TASKS_DOC_ID,
+  PRINT_DOC_ID,
+  fetchDivCompRanges,
+  buildTasksDocumentPayload,
+  extractDateTokensFromDocHeaderFooter,
+  formatDate,
+  findMarkerRange,
+  getDocumentEndIndex,
+  rowsToPlainText,
+  sliceToFirstEmpty,
+  sliceToThirdEmpty,
+  fetchRangeRows,
+  fetchSingleCell,
+  PRINT_SHEET_TRAFFIC,
+  PRINT_SHEET_KANGOO,
+  savePdfBufferInProject,
+  TAREAS_PDF_DIR,
+  IMPRIMIR_PEDIDOS_PDF_DIR,
 });
 
-app.get("/api/imprimir-pedidos/pdf", async (_req, res) => {
-  try {
-    if (!PRINT_DOC_ID) {
-      res.status(500).send("Missing IMPRESION_DOC_ID/PRINT_DOC_ID.");
-      return;
-    }
-
-    const [traficA, traficGH, kangooA, kangooGH, kangooA4] = await Promise.all([
-      fetchRangeRows(PRINT_SHEET_TRAFFIC, "A4:A2000"),
-      fetchRangeRows(PRINT_SHEET_TRAFFIC, "G6:H2000"),
-      fetchRangeRows(PRINT_SHEET_KANGOO, "A4:A2000"),
-      fetchRangeRows(PRINT_SHEET_KANGOO, "G6:H2000"),
-      fetchSingleCell(PRINT_SHEET_KANGOO, "A4"),
-    ]);
-
-    const flete1Rows = sliceToThirdEmpty([...traficA, [], [], []]);
-    const suma1Rows = sliceToFirstEmpty([...traficGH, []]);
-    const flete2Rows = sliceToThirdEmpty([...kangooA, [], [], []]);
-    const suma2Rows = sliceToFirstEmpty([...kangooGH, []]);
-
-    const flete1Text = rowsToPlainText(flete1Rows);
-    const suma1Text = rowsToPlainText(suma1Rows);
-    const flete2Text = rowsToPlainText(flete2Rows);
-    const suma2Text = rowsToPlainText(suma2Rows);
-    const hasFlete2 = String(kangooA4 ?? "").trim() !== "#N/A";
-
-    const docs = await getDocsClient();
-    let doc = await docs.documents.get({ documentId: PRINT_DOC_ID });
-
-    const insertSectionBetween = (requestList, fromMarker, toMarker, text, addBlankAfter = false) => {
-      const startIndex = fromMarker.endIndex;
-      const endIndex = toMarker.startIndex;
-      if (endIndex > startIndex) {
-        requestList.push({
-          deleteContentRange: {
-            range: { startIndex, endIndex },
-          },
-        });
-      }
-      const tail = addBlankAfter ? "\n\n" : "\n";
-      const payload = text ? `\n${text}${tail}` : `\n${tail}`;
-      requestList.push({
-        insertText: {
-          location: { index: startIndex },
-          text: payload,
-        },
-      });
-    };
-
-    const flete1Marker = findMarkerRange(doc, [
-      /(^|\n)\s*FLETE\s*1\b/i,
-      /(^|\n)\s*FLETE\s*I\b/i,
-      /FLETE\s*1\b/i,
-    ]);
-    const suma1Marker = findMarkerRange(doc, [
-      /(^|\n)\s*SUMA\s+FLETE\s*1\b/i,
-      /(^|\n)\s*SUMA\s+FLETE\s*I\b/i,
-      /SUMA\s+FLETE\s*1\b/i,
-    ]);
-    if (!flete1Marker || !suma1Marker) {
-      throw new Error("No se encontraron marcadores de FLETE 1 en el Doc.");
-    }
-
-    const flete2Marker = findMarkerRange(doc, [
-      /(^|\n)\s*FLETE\s*2\b/i,
-      /(^|\n)\s*FLETE\s*II\b/i,
-      /FLETE\s*2\b/i,
-    ]);
-    const suma2Marker = findMarkerRange(doc, [
-      /(^|\n)\s*SUMA\s+FLETE\s*2\b/i,
-      /(^|\n)\s*SUMA\s+FLETE\s*II\b/i,
-      /SUMA\s+FLETE\s*2\b/i,
-    ]);
-    const docEndIndex = getDocumentEndIndex(doc);
-
-    const requests1 = [];
-    insertSectionBetween(requests1, flete1Marker, suma1Marker, flete1Text, true);
-
-    if (flete2Marker) {
-      insertSectionBetween(requests1, suma1Marker, flete2Marker, suma1Text, false);
-    } else {
-      if (docEndIndex > suma1Marker.endIndex) {
-        requests1.push({
-          deleteContentRange: {
-            range: { startIndex: suma1Marker.endIndex, endIndex: docEndIndex },
-          },
-        });
-      }
-      const payload = suma1Text ? `\n${suma1Text}\n` : "\n";
-      requests1.push({
-        insertText: {
-          location: { index: suma1Marker.endIndex },
-          text: payload,
-        },
-      });
-    }
-
-    if (requests1.length) {
-      await docs.documents.batchUpdate({
-        documentId: PRINT_DOC_ID,
-        requestBody: { requests: requests1 },
-      });
-    }
-
-    doc = await docs.documents.get({ documentId: PRINT_DOC_ID });
-
-    if (!hasFlete2) {
-      const updatedFlete2 = findMarkerRange(doc, [
-        /(^|\n)\s*FLETE\s*2\b/i,
-        /(^|\n)\s*FLETE\s*II\b/i,
-        /FLETE\s*2\b/i,
-      ]);
-      const updatedEnd = getDocumentEndIndex(doc);
-      if (updatedFlete2 && updatedEnd > updatedFlete2.startIndex) {
-        await docs.documents.batchUpdate({
-          documentId: PRINT_DOC_ID,
-          requestBody: {
-            requests: [
-              {
-                deleteContentRange: {
-                  range: { startIndex: updatedFlete2.startIndex, endIndex: updatedEnd },
-                },
-              },
-            ],
-          },
-        });
-      }
-    } else {
-      const updatedFlete2 = findMarkerRange(doc, [
-        /(^|\n)\s*FLETE\s*2\b/i,
-        /(^|\n)\s*FLETE\s*II\b/i,
-        /FLETE\s*2\b/i,
-      ]);
-      const updatedSuma2 = findMarkerRange(doc, [
-        /(^|\n)\s*SUMA\s+FLETE\s*2\b/i,
-        /(^|\n)\s*SUMA\s+FLETE\s*II\b/i,
-        /SUMA\s+FLETE\s*2\b/i,
-      ]);
-      if (!updatedFlete2 || !updatedSuma2) {
-        throw new Error("No se encontraron marcadores de FLETE 2 en el Doc.");
-      }
-
-      await docs.documents.batchUpdate({
-        documentId: PRINT_DOC_ID,
-        requestBody: {
-          requests: [
-            {
-              insertPageBreak: {
-                location: { index: updatedFlete2.startIndex },
-              },
-            },
-          ],
-        },
-      });
-
-      doc = await docs.documents.get({ documentId: PRINT_DOC_ID });
-      const finalFlete2 = findMarkerRange(doc, [
-        /(^|\n)\s*FLETE\s*2\b/i,
-        /(^|\n)\s*FLETE\s*II\b/i,
-        /FLETE\s*2\b/i,
-      ]);
-      const finalSuma2 = findMarkerRange(doc, [
-        /(^|\n)\s*SUMA\s+FLETE\s*2\b/i,
-        /(^|\n)\s*SUMA\s+FLETE\s*II\b/i,
-        /SUMA\s+FLETE\s*2\b/i,
-      ]);
-      if (!finalFlete2 || !finalSuma2) {
-        throw new Error("No se encontraron marcadores de FLETE 2 en el Doc.");
-      }
-
-      const requests2 = [];
-      insertSectionBetween(requests2, finalFlete2, finalSuma2, flete2Text, true);
-
-      const endAfterSuma2 = getDocumentEndIndex(doc);
-      if (endAfterSuma2 > finalSuma2.endIndex) {
-        requests2.push({
-          deleteContentRange: {
-            range: { startIndex: finalSuma2.endIndex, endIndex: endAfterSuma2 },
-          },
-        });
-      }
-      const suma2Payload = suma2Text ? `\n${suma2Text}\n` : "\n";
-      requests2.push({
-        insertText: {
-          location: { index: finalSuma2.endIndex },
-          text: suma2Payload,
-        },
-      });
-
-      if (requests2.length) {
-        await docs.documents.batchUpdate({
-          documentId: PRINT_DOC_ID,
-          requestBody: { requests: requests2 },
-        });
-      }
-    }
-
-    const drive = await getDriveClient();
-    const pdf = await drive.files.export(
-      { fileId: PRINT_DOC_ID, mimeType: "application/pdf" },
-      { responseType: "arraybuffer" }
-    );
-
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "attachment; filename=\"imprimir-pedidos.pdf\"");
-    res.status(200).send(Buffer.from(pdf.data));
-  } catch (error) {
-    console.error("/api/imprimir-pedidos/pdf failed:", error);
-    res.status(500).send(String(error?.message || error));
-  }
+const masterDataController = createMasterDataController({
+  getDbModels: async () => app.locals.dbModels || null,
 });
+
+app.get("/api/tareas/pdf", pdfReportsController.handleTareasPdf);
+app.get("/api/imprimir-pedidos/pdf", pdfReportsController.handleImprimirPedidosPdf);
+
+app.get("/api/db/clients", masterDataController.handleListClients);
+app.post("/api/db/clients", masterDataController.handleCreateClient);
+app.get("/api/db/clients/:clientId", masterDataController.handleGetClientById);
+app.put("/api/db/clients/:clientId", masterDataController.handleUpdateClient);
+app.put(
+  "/api/db/clients/by-external/:externalId",
+  masterDataController.handleUpsertClientByExternalId
+);
+app.delete("/api/db/clients/:clientId", masterDataController.handleDeleteClient);
+
+app.get("/api/db/responsibles", masterDataController.handleListResponsibles);
+app.post("/api/db/responsibles", masterDataController.handleCreateResponsible);
+app.get("/api/db/responsibles/:responsibleId", masterDataController.handleGetResponsibleById);
+app.put("/api/db/responsibles/:responsibleId", masterDataController.handleUpdateResponsible);
+app.delete("/api/db/responsibles/:responsibleId", masterDataController.handleDeleteResponsible);
+
+app.get(
+  "/api/db/clients/:clientId/responsibles",
+  masterDataController.handleListClientAssignments
+);
+app.post(
+  "/api/db/clients/:clientId/responsibles",
+  masterDataController.handleAssignResponsible
+);
+app.delete(
+  "/api/db/clients/:clientId/responsibles/:responsibleId",
+  masterDataController.handleDeleteAssignment
+);
+app.get(
+  "/api/db/responsibles/:responsibleId/clients",
+  masterDataController.handleListResponsibleAssignments
+);
 
 app.get("/api/client-numbers", async (req, res) => {
   try {
@@ -902,13 +775,32 @@ app.post("/api/append-order", async (req, res) => {
       // `saveOrderRow` is imported dynamically during init and attached to app.locals
       const saveOrderRow = app.locals.saveOrderRow;
       if (typeof saveOrderRow === "function") {
-        db = await saveOrderRow({ sheetName: SHEET_NAME, updatedRange, row: normalizedRow });
+        db = await saveOrderRow({
+          sheetName: SHEET_NAME,
+          updatedRange,
+          row: normalizedRow,
+          headers: values?.[0] || [],
+        });
       } else {
         db = { ok: false, skipped: true, reason: "db module not initialized" };
       }
     } catch (error) {
       db = { ok: false, skipped: false, reason: String(error?.message || error) };
     }
+
+    const verification = {
+      sheet: {
+        ok: true,
+        updatedRange,
+        rowNumber: nextWriteRowNumber,
+      },
+      db: {
+        ok: Boolean(db?.ok),
+        skipped: Boolean(db?.skipped),
+        reason: db?.ok ? "" : String(db?.reason || "db persistence failed"),
+        normalized: db?.normalized || null,
+      },
+    };
 
     res.json({
       ok: true,
@@ -917,6 +809,7 @@ app.post("/api/append-order", async (req, res) => {
       writeRange,
       updates: response?.data || null,
       db,
+      verification,
     });
   } catch (error) {
     res.status(500).json({
@@ -930,12 +823,15 @@ const init = async () => {
     // Import the DB module as ESM; this file remains CommonJS for now.
     // Import DB module statically now that this project is ESM
     // Prefer the js file which is already ESM
-    const { saveOrderRow } = await import("./src/db/postgres.js");
+    const { ensureSchema, getModels, saveOrderRow } = await import("./src/db/postgres.js");
+    await ensureSchema();
     app.locals.saveOrderRow = saveOrderRow;
+    app.locals.dbModels = await getModels();
   } catch (error) {
     // eslint-disable-next-line no-console
     console.warn("Warning: could not initialize DB module:", String(error?.message || error));
     app.locals.saveOrderRow = null;
+    app.locals.dbModels = null;
   }
 
   app.listen(PORT, () => {

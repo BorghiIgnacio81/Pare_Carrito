@@ -691,6 +691,13 @@ main {
   gap: 12px;
 }
 
+.product-card__warning {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #b00020;
+}
+
 .variant-row {
   display: grid;
   gap: 10px;

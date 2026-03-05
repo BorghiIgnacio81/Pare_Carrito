@@ -53,6 +53,28 @@
               </button>
             </div>
           </div>
+
+          <label for="responsible-select">Responsable</label>
+          <div class="client-select__row">
+            <select id="responsible-select">
+              <option value="">Seleccione un responsable</option>
+            </select>
+            <div class="client-select__actions">
+              <button id="new-responsible" type="button" class="button-secondary">
+                Nuevo responsable
+              </button>
+              <button id="edit-responsible" type="button" class="button-secondary" disabled>
+                Editar responsable
+              </button>
+              <button id="assign-responsible" type="button" class="button-secondary" disabled>
+                Asignar
+              </button>
+              <button id="remove-responsible" type="button" class="button-secondary" disabled>
+                Quitar
+              </button>
+            </div>
+          </div>
+          <p id="responsible-assignment-status" class="save-status" aria-live="polite"></p>
         </div>
 
         <div class="page-header__logo" aria-label="Pare Carrito">

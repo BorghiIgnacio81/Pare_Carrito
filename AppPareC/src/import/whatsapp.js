@@ -6,8 +6,39 @@ const normalizeSpaces = (value) =>
     .replace(/\s+/g, " ")
     .trim();
 
+const stripWhatsAppEnvelope = (value) => {
+  let working = normalizeSpaces(value);
+  if (!working) {
+    return "";
+  }
+
+  working = working
+    .replace(/^\[[^\]]+\]\s*/g, "")
+    .replace(
+      /^\d{1,2}:\d{2}(?:\s*[ap]\.?\s*m\.?)?\s*,\s*\d{1,2}\/\d{1,2}\/\d{2,4}\s*-\s*/i,
+      ""
+    );
+
+  working = working.replace(/^\d{1,3}\)\s*[^:]{2,}:\s*/i, "");
+
+  const colonIndex = working.indexOf(":");
+  if (colonIndex >= 0) {
+    const before = normalizeSpaces(working.slice(0, colonIndex));
+    const after = normalizeSpaces(working.slice(colonIndex + 1));
+    const looksLikeSenderPrefix =
+      /^\d{1,3}\)/.test(before) ||
+      before.length >= 18 ||
+      /whatsapp|rpto|srl|sas|sa\b|barrett|cliente/i.test(before);
+    if (after && looksLikeSenderPrefix) {
+      working = after;
+    }
+  }
+
+  return normalizeSpaces(working);
+};
+
 const normalizeOrderLine = (value) => {
-  const raw = normalizeSpaces(value);
+  const raw = stripWhatsAppEnvelope(value);
   if (!raw) {
     return "";
   }
@@ -19,6 +50,49 @@ const normalizeOrderLine = (value) => {
     .replace(/\.(?=\s*$)/g, " ")
     .replace(/[;,]+$/g, "")
     .trim();
+};
+
+const splitCompositeOrderLine = (value) => {
+  const raw = stripWhatsAppEnvelope(value);
+  if (!raw) {
+    return [];
+  }
+
+  let working = raw;
+  const colonIndex = working.indexOf(":");
+  if (colonIndex >= 0) {
+    const before = normalizeSpaces(working.slice(0, colonIndex));
+    const after = normalizeSpaces(working.slice(colonIndex + 1));
+    if (after && !/\d/.test(before) && /\d/.test(after)) {
+      working = after;
+    }
+  }
+
+  const out = [];
+  let current = "";
+  for (let i = 0; i < working.length; i += 1) {
+    const ch = working[i];
+    const prev = i > 0 ? working[i - 1] : "";
+    const next = i + 1 < working.length ? working[i + 1] : "";
+    const isDecimalComma = ch === "," && /\d/.test(prev) && /\d/.test(next);
+    const isSeparator = (ch === "," || ch === ";") && !isDecimalComma;
+    if (isSeparator) {
+      const piece = normalizeOrderLine(current);
+      if (piece) {
+        out.push(piece);
+      }
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+
+  const tail = normalizeOrderLine(current);
+  if (tail) {
+    out.push(tail);
+  }
+
+  return out.length ? out : [normalizeOrderLine(working)].filter(Boolean);
 };
 
 const detectUnit = (name) => {
@@ -65,6 +139,9 @@ const extractTrailingComment = (value) => {
   return { text: cleaned, comment };
 };
 
+const cleanLeadingDeToken = (value) =>
+  normalizeSpaces(String(value ?? "").replace(/^d(?:e)?\s+/i, " "));
+
 export const parseQuantityUnitAndName = (value, customUnitSynonyms = unitSynonyms) => {
   const raw = normalizeOrderLine(value);
   if (!raw) {
@@ -74,6 +151,7 @@ export const parseQuantityUnitAndName = (value, customUnitSynonyms = unitSynonym
   const { text: withoutComment, comment } = extractTrailingComment(raw);
   let working = normalizeSpaces(withoutComment);
   working = working.replace(/(\d)\s*[kK]\b/g, "$1 k");
+  working = working.replace(/(\d)\s*[kK][hH]\b/g, "$1 k");
   if (!working) {
     return null;
   }
@@ -114,7 +192,7 @@ export const parseQuantityUnitAndName = (value, customUnitSynonyms = unitSynonym
       unit = "Kg";
     }
 
-    working = normalizeSpaces(working.replace(/^de\s+/i, " "));
+    working = cleanLeadingDeToken(working);
     if (!working) {
       return null;
     }
@@ -156,6 +234,12 @@ export const parseQuantityUnitAndName = (value, customUnitSynonyms = unitSynonym
       unit = detectUnit(unitText);
     }
 
+    // Si la palabra intermedia no es una unidad reconocida (ej: "crespa", "mantecosa",
+    // "morada"), forma parte del nombre del producto y no debe descartarse.
+    const normalizedNamePart = unit
+      ? namePart
+      : normalizeSpaces(`${namePart} ${unitText}`);
+
     if (unit === "Gr") {
       quantity /= 1000;
       unit = "Kg";
@@ -165,7 +249,7 @@ export const parseQuantityUnitAndName = (value, customUnitSynonyms = unitSynonym
     return {
       quantity,
       unit,
-      name: namePart,
+      name: normalizedNamePart,
       raw,
       quantityText: unitMode ? `${quantity} uni` : "",
       unitMode,
@@ -284,17 +368,20 @@ export const aggregateItems = (items, normalizeVariantForSheetMatch) => {
 };
 
 export const parseWhatsAppTextToItems = (text, clientId, resolveParsedLineToItem, normalizeVariantForSheetMatch) => {
-  const lines = String(text ?? "")
+  const baseLines = String(text ?? "")
     .split(/\r?\n/)
-    .map((line) => line.trim())
+    .map((line) => stripWhatsAppEnvelope(line))
     .filter(Boolean);
+
+  const lines = baseLines.flatMap((line) => splitCompositeOrderLine(line));
 
   const parsedLines = [];
   const resolved = [];
   const unresolved = [];
   const ignored = [];
+  let importOrder = 0;
 
-  lines.forEach((line, lineIndex) => {
+  lines.forEach((line) => {
     const parsed = parseQuantityUnitAndName(line);
     if (parsed) {
       parsedLines.push(parsed);
@@ -302,9 +389,10 @@ export const parseWhatsAppTextToItems = (text, clientId, resolveParsedLineToItem
       if (!item) {
         unresolved.push(parsed);
       } else {
-        item.importOrder = lineIndex;
+        item.importOrder = importOrder;
         resolved.push(item);
       }
+      importOrder += 1;
       return;
     }
 
@@ -331,9 +419,10 @@ export const parseWhatsAppTextToItems = (text, clientId, resolveParsedLineToItem
       if (!specialItem) {
         unresolved.push(specialParsed);
       } else {
-        specialItem.importOrder = lineIndex;
+        specialItem.importOrder = importOrder;
         resolved.push(specialItem);
       }
+      importOrder += 1;
       return;
     }
 
@@ -364,8 +453,9 @@ export const parseWhatsAppTextToItems = (text, clientId, resolveParsedLineToItem
     }
 
     parsedLines.push(implicitParsed);
-    implicitItem.importOrder = lineIndex;
+    implicitItem.importOrder = importOrder;
     resolved.push(implicitItem);
+    importOrder += 1;
   });
 
   const aggregated = aggregateItems(resolved, normalizeVariantForSheetMatch);

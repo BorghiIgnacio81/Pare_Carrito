@@ -331,6 +331,8 @@ export const normalizeProductFromHeader = (raw, options = {}) => {
       unit = "Kg";
     } else if (loweredName === "tomate") {
       unit = "Kg";
+    } else if (loweredName === "miel") {
+      unit = "Pote";
     } else if (loweredName.includes("lechuga")) {
       unit = "Unidad";
     } else {

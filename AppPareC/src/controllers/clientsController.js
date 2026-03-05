@@ -7,6 +7,7 @@ export const createClientsController = ({
   onClientUpdated,
 } = {}) => {
   const normalizeSpaces = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  let dbEnabled = false;
 
   const CLIENT_NAME_OVERRIDES_KEY = "clientNameOverrides__v1";
   const EXTRA_CLIENTS_KEY = "extraClients__v1";
@@ -22,6 +23,65 @@ export const createClientsController = ({
     const n = Number(match[1]);
     if (!Number.isFinite(n) || n <= 0) return "";
     return String(n).padStart(3, "0");
+  };
+
+  const parseNullableCode = (value) => {
+    if (value == null || String(value).trim() === "") {
+      return null;
+    }
+    const n = Number(value);
+    if (!Number.isFinite(n)) {
+      return null;
+    }
+    return Math.trunc(n);
+  };
+
+  const canUseDbClients = () =>
+    Boolean(ordersApi && typeof ordersApi.listDbClients === "function");
+
+  const mergeDbClientsIntoLocal = (dbClients) => {
+    const byId = new Map((clients || []).map((c) => [String(c.id), c]));
+    (Array.isArray(dbClients) ? dbClients : []).forEach((entry) => {
+      const externalId = normalizeClientId(entry?.external_id);
+      if (!externalId) {
+        return;
+      }
+
+      const name = normalizeSpaces(entry?.name);
+      if (!name) {
+        return;
+      }
+
+      const code = parseNullableCode(entry?.code);
+      const dbId = Number(entry?.id);
+
+      if (byId.has(externalId)) {
+        const existing = byId.get(externalId);
+        existing.name = name;
+        existing.code = Number.isFinite(code) ? code : existing.code;
+        if (Number.isFinite(dbId)) {
+          existing.dbId = dbId;
+        }
+        if (!originalClientNameById.has(externalId)) {
+          originalClientNameById.set(externalId, name);
+        }
+        return;
+      }
+
+      const next = {
+        id: externalId,
+        name,
+        code: Number.isFinite(code) ? code : 0,
+      };
+      if (Number.isFinite(dbId)) {
+        next.dbId = dbId;
+      }
+      clients.push(next);
+      byId.set(externalId, next);
+      if (!originalClientNameById.has(externalId)) {
+        originalClientNameById.set(externalId, name);
+      }
+    });
   };
 
   const loadExtraClients = () => {
@@ -133,7 +193,7 @@ export const createClientsController = ({
     }
 
     editClientButton.disabled = !clientSelect?.value;
-    editClientButton.addEventListener("click", () => {
+    editClientButton.addEventListener("click", async () => {
       const selectedId = String(clientSelect?.value || "").trim();
       if (!selectedId) {
         return;
@@ -151,6 +211,28 @@ export const createClientsController = ({
       }
       const trimmed = normalizeSpaces(next);
       const overrides = loadClientNameOverrides();
+
+      if (dbEnabled && canUseDbClients()) {
+        try {
+          if (!trimmed) {
+            alert("El nombre no puede quedar vacío cuando está sincronizado con DB.");
+            return;
+          }
+          const response = await ordersApi.upsertDbClientByExternalId({
+            externalId: selectedId,
+            name: trimmed,
+            code: parseNullableCode(client.code) ?? 0,
+          });
+          const dbClient = response?.data || null;
+          if (dbClient && Number.isFinite(Number(dbClient.id))) {
+            client.dbId = Number(dbClient.id);
+          }
+        } catch (error) {
+          console.error(error);
+          alert(String(error?.message || error || "No se pudo actualizar cliente en DB."));
+          return;
+        }
+      }
 
       if (!trimmed) {
         // vacío => volver al nombre original
@@ -210,7 +292,22 @@ export const createClientsController = ({
           return;
         }
 
+        let dbId = null;
+        if (dbEnabled && canUseDbClients()) {
+          const db = await ordersApi.createDbClient({
+            externalId: id,
+            name: trimmedName,
+            code: 0,
+          });
+          if (Number.isFinite(Number(db?.data?.id))) {
+            dbId = Number(db.data.id);
+          }
+        }
+
         const extra = { id, name: trimmedName, code: 0 };
+        if (Number.isFinite(dbId)) {
+          extra.dbId = dbId;
+        }
         const extras = loadExtraClients();
         extras.push(extra);
         saveExtraClients(extras);
@@ -232,6 +329,23 @@ export const createClientsController = ({
   };
 
   const init = () => {
+    if (canUseDbClients()) {
+      ordersApi
+        .listDbClients({ includeInactive: false })
+        .then((response) => {
+          mergeDbClientsIntoLocal(response?.data || []);
+          dbEnabled = true;
+          rebuildClientSelect();
+          if (typeof onClientUpdated === "function") {
+            onClientUpdated();
+          }
+        })
+        .catch((error) => {
+          console.warn("DB clients sync skipped:", error);
+          dbEnabled = false;
+        });
+    }
+
     mergeExtraClientsIntoConstants();
     applyClientNameOverrides();
     populateClients();

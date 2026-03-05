@@ -95,6 +95,136 @@ export const createOrdersApi = (options = {}) => {
       return data;
     },
 
+    listDbClients: async ({ includeInactive = false } = {}) => {
+      const q = includeInactive ? "?includeInactive=1" : "";
+      const url = `${baseUrl}/db/clients${q}`;
+      const { response, data } = await fetchJson(url);
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudieron listar clientes en DB.").trim();
+        throw new Error(msg || "No se pudieron listar clientes en DB.");
+      }
+      return { data: Array.isArray(data?.data) ? data.data : [] };
+    },
+
+    createDbClient: async ({ externalId, name, code = null, notes = null } = {}) => {
+      const url = `${baseUrl}/db/clients`;
+      const { response, data } = await fetchJson(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ externalId, name, code, notes }),
+      });
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudo crear cliente en DB.").trim();
+        throw new Error(msg || "No se pudo crear cliente en DB.");
+      }
+      return { data: data?.data || null };
+    },
+
+    updateDbClientById: async ({ id, externalId, name, code, notes, isActive } = {}) => {
+      const url = `${baseUrl}/db/clients/${encodeURIComponent(String(id || ""))}`;
+      const { response, data } = await fetchJson(url, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ externalId, name, code, notes, isActive }),
+      });
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudo actualizar cliente en DB.").trim();
+        throw new Error(msg || "No se pudo actualizar cliente en DB.");
+      }
+      return { data: data?.data || null };
+    },
+
+    upsertDbClientByExternalId: async ({ externalId, name, code = null, notes = null } = {}) => {
+      const url = `${baseUrl}/db/clients/by-external/${encodeURIComponent(String(externalId || ""))}`;
+      const { response, data } = await fetchJson(url, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, code, notes }),
+      });
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudo sincronizar cliente en DB.").trim();
+        throw new Error(msg || "No se pudo sincronizar cliente en DB.");
+      }
+      return { data: data?.data || null };
+    },
+
+    listDbResponsibles: async ({ includeInactive = false } = {}) => {
+      const q = includeInactive ? "?includeInactive=1" : "";
+      const url = `${baseUrl}/db/responsibles${q}`;
+      const { response, data } = await fetchJson(url);
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudieron listar responsables en DB.").trim();
+        throw new Error(msg || "No se pudieron listar responsables en DB.");
+      }
+      return { data: Array.isArray(data?.data) ? data.data : [] };
+    },
+
+    createDbResponsible: async ({ code = null, name, notes = null } = {}) => {
+      const url = `${baseUrl}/db/responsibles`;
+      const { response, data } = await fetchJson(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, name, notes }),
+      });
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudo crear responsable en DB.").trim();
+        throw new Error(msg || "No se pudo crear responsable en DB.");
+      }
+      return { data: data?.data || null };
+    },
+
+    updateDbResponsibleById: async ({ id, code, name, notes, isActive } = {}) => {
+      const url = `${baseUrl}/db/responsibles/${encodeURIComponent(String(id || ""))}`;
+      const { response, data } = await fetchJson(url, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, name, notes, isActive }),
+      });
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudo actualizar responsable en DB.").trim();
+        throw new Error(msg || "No se pudo actualizar responsable en DB.");
+      }
+      return { data: data?.data || null };
+    },
+
+    listClientResponsibles: async ({ clientId } = {}) => {
+      const url = `${baseUrl}/db/clients/${encodeURIComponent(String(clientId || ""))}/responsibles`;
+      const { response, data } = await fetchJson(url);
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudo listar asignaciones del cliente.").trim();
+        throw new Error(msg || "No se pudo listar asignaciones del cliente.");
+      }
+      return { data: Array.isArray(data?.data) ? data.data : [] };
+    },
+
+    assignResponsibleToClient: async ({ clientId, responsibleId, roleLabel = null, isPrimary = true } = {}) => {
+      const url = `${baseUrl}/db/clients/${encodeURIComponent(String(clientId || ""))}/responsibles`;
+      const { response, data } = await fetchJson(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ responsibleId, roleLabel, isPrimary }),
+      });
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudo asignar responsable al cliente.").trim();
+        throw new Error(msg || "No se pudo asignar responsable al cliente.");
+      }
+      return { data: data?.data || null };
+    },
+
+    removeResponsibleFromClient: async ({ clientId, responsibleId } = {}) => {
+      const url = `${baseUrl}/db/clients/${encodeURIComponent(String(clientId || ""))}/responsibles/${encodeURIComponent(
+        String(responsibleId || "")
+      )}`;
+      const { response, data } = await fetchJson(url, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudo quitar responsable del cliente.").trim();
+        throw new Error(msg || "No se pudo quitar responsable del cliente.");
+      }
+      return { data: data?.data || null };
+    },
+
     loadAliases: async () => {
       const url = `${baseUrl}/aliases`;
       const { response, data } = await fetchJson(url);

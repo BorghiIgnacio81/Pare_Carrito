@@ -71,6 +71,11 @@ export const createProductCardBuilder = ({
 
     const rowsContainer = document.createElement("div");
     rowsContainer.className = "variant-rows";
+    const comboWarning = document.createElement("p");
+    comboWarning.className = "product-card__warning hidden";
+    comboWarning.textContent = "La combinación elegida no existe en la planilla (Sheet).";
+
+    const isZapalloProduct = product?.id === "zapallo";
 
     const supportsVariantIcons = product && (product.id === "manzana" || product.id === "morron");
 
@@ -146,8 +151,95 @@ export const createProductCardBuilder = ({
       return lowered === "normal" || lowered === "comun" ? "" : trimmed;
     };
 
-    const getAllowedUnitsForVariant = (variantLabel) => {
+    const normalizeLabelKey = (value) =>
+      String(value || "")
+        .trim()
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+
+    const getZapalloUnitOptions = () => {
+      if (!isZapalloProduct) {
+        return Array.isArray(product.units) ? product.units : [];
+      }
+      const source = Array.isArray(product.units) ? product.units : [];
+      const byKey = new Map();
+      source.forEach((unit) => {
+        const key = normalizeLabelKey(unit);
+        if (key && !byKey.has(key)) {
+          byKey.set(key, unit);
+        }
+      });
+      if (!byKey.has("kg")) {
+        byKey.set("kg", "Kg");
+      }
+      if (!byKey.has("entero")) {
+        byKey.set("entero", "Entero");
+      }
+      const orderedKeys = ["kg", "entero"];
+      return orderedKeys.map((key) => byKey.get(key)).filter(Boolean);
+    };
+
+    const getZapalloVariantOptions = () => {
+      const source = Array.isArray(product.variants) ? product.variants : [];
+      const byKey = new Map();
+      source.forEach((variant) => {
+        const key = normalizeLabelKey(variant);
+        if (key && !byKey.has(key)) {
+          byKey.set(key, variant);
+        }
+      });
+      if (!byKey.has("amarillo")) {
+        byKey.set("amarillo", "Amarillo");
+      }
+      if (!byKey.has("negro")) {
+        byKey.set("negro", "Negro");
+      }
+      return [byKey.get("amarillo"), byKey.get("negro")].filter(Boolean);
+    };
+
+    const hasValidCombo = (unit, variantLabel) => {
       if (!product?.comboSet || !(product.comboSet instanceof Set)) {
+        return true;
+      }
+      const normalizedUnit = String(unit || "").trim();
+      if (!normalizedUnit) {
+        return true;
+      }
+      const normalizedVariant = normalizeVariantKey(variantLabel);
+      return product.comboSet.has(`${normalizedUnit}__${normalizedVariant}`);
+    };
+
+    const updateComboWarningVisibility = () => {
+      if (!comboWarning) {
+        return;
+      }
+      const rows = Array.from(rowsContainer.querySelectorAll(".variant-row"));
+      const hasInvalid = rows.some((row) => {
+        const unitSelect = row.querySelector(".unit-select");
+        const unitValue = row.querySelector(".unit-value");
+        const variantSelect = row.querySelector(".variant-select");
+        const selectedUnit = unitSelect ? unitSelect.value : unitValue?.textContent?.trim() || "";
+        const selectedVariant = variantSelect ? variantSelect.value : "";
+        const variantRequired =
+          Boolean(product.variants.length) && !(variantSelect && variantSelect.disabled);
+        const hasSelections = selectedUnit && (!variantRequired || selectedVariant);
+        if (!hasSelections) {
+          return false;
+        }
+        return !hasValidCombo(selectedUnit, selectedVariant);
+      });
+      comboWarning.classList.toggle("hidden", !hasInvalid);
+    };
+
+    const getAllowedUnitsForVariant = (variantLabel) => {
+      if (isZapalloProduct) {
+        return getZapalloUnitOptions();
+      }
+      if (!product?.comboSet || !(product.comboSet instanceof Set)) {
+        return product.units;
+      }
+      if (!String(variantLabel || "").trim()) {
         return product.units;
       }
       const variantKey = normalizeVariantKey(variantLabel);
@@ -158,6 +250,16 @@ export const createProductCardBuilder = ({
     };
 
     const getAllowedVariantLabelsForUnit = (unit) => {
+      if (isZapalloProduct) {
+        const selectedUnitKey = normalizeLabelKey(unit);
+        if (!selectedUnitKey || selectedUnitKey === "kg") {
+          return getZapalloVariantOptions();
+        }
+        if (selectedUnitKey === "entero") {
+          return [];
+        }
+        return getZapalloVariantOptions();
+      }
       if (!product?.comboIndex || !unit) {
         return product.variants;
       }
@@ -277,7 +379,7 @@ export const createProductCardBuilder = ({
       }
 
       const effectivePreset = { ...preset };
-      const isSingleUnit = product.units.length === 1;
+      const isSingleUnit = isZapalloProduct ? false : product.units.length === 1;
       const fixedUnit = product.units[0] || product.defaultUnit || "";
       const normalizedProductName = product.name
         .toLowerCase()
@@ -301,9 +403,12 @@ export const createProductCardBuilder = ({
         product.variants.length && effectivePreset.variant
           ? getAllowedUnitsForVariant(effectivePreset.variant)
           : null;
+      const unitOptions = isZapalloProduct ? getZapalloUnitOptions() : product.units;
+      const initialUnitSelection =
+        effectivePreset.unit || (isSingleUnit ? fixedUnit : "");
       const unitSelect = isSingleUnit
         ? null
-        : buildUnitSelect(effectivePreset.unit || product.defaultUnit, allowedUnitsInitial);
+        : buildUnitSelect(initialUnitSelection, allowedUnitsInitial || unitOptions);
       const allowUnitMode = unitModeProducts.has(normalizedProductName);
       const unitModeToggle = allowUnitMode ? document.createElement("input") : null;
       if (unitModeToggle) {
@@ -357,10 +462,8 @@ export const createProductCardBuilder = ({
         variantLabel.textContent = "Variante";
         const initialUnit = unitSelect ? unitSelect.value : fixedUnit;
         const allowedVariantsInitial = initialUnit ? getAllowedVariantLabelsForUnit(initialUnit) : null;
-        variantSelect = buildVariantSelect(
-          effectivePreset.variant || product.defaultVariant || "",
-          allowedVariantsInitial
-        );
+        const initialVariantSelection = effectivePreset.variant || "";
+        variantSelect = buildVariantSelect(initialVariantSelection, allowedVariantsInitial);
         variantField.appendChild(variantLabel);
         variantField.appendChild(variantSelect);
       }
@@ -393,6 +496,44 @@ export const createProductCardBuilder = ({
 
       const syncComboConstraints = (source) => {
         if (!product?.comboSet || !(product.comboSet instanceof Set)) {
+          if (isZapalloProduct && unitSelect && variantSelect) {
+            const unitOptions = getZapalloUnitOptions();
+            const currentUnit = unitSelect.value;
+            rebuildSelect(unitSelect, unitOptions, currentUnit);
+
+            const unitKey = normalizeLabelKey(unitSelect.value);
+            const disableVariant = unitKey === "entero";
+            const variantOptions = getAllowedVariantLabelsForUnit(unitSelect.value);
+            const desiredVariant = disableVariant ? "" : variantSelect.value;
+            rebuildSelect(variantSelect, variantOptions, desiredVariant);
+            variantSelect.disabled = disableVariant;
+            if (disableVariant) {
+              updateItemState(rowId, { variant: "" });
+            }
+          }
+          updateComboWarningVisibility();
+          return;
+        }
+        if (isZapalloProduct) {
+          if (unitSelect && variantSelect) {
+            const unitOptions = getZapalloUnitOptions();
+            const currentUnit = unitSelect.value;
+            rebuildSelect(unitSelect, unitOptions, currentUnit);
+
+            const unitKey = normalizeLabelKey(unitSelect.value);
+            const disableVariant = unitKey === "entero";
+            const variantOptions = getAllowedVariantLabelsForUnit(unitSelect.value);
+            const desiredVariant = disableVariant ? "" : variantSelect.value;
+            rebuildSelect(variantSelect, variantOptions, desiredVariant);
+            variantSelect.disabled = disableVariant;
+            if (disableVariant) {
+              updateItemState(rowId, { variant: "" });
+            }
+          }
+          updateHeaderIconFromPrimaryVariant();
+          updateRowIcon(row);
+          updateQuantityStep();
+          updateComboWarningVisibility();
           return;
         }
         const currentUnit = unitSelect ? unitSelect.value : fixedUnit;
@@ -426,6 +567,7 @@ export const createProductCardBuilder = ({
         updateRowIcon(row);
 
         updateQuantityStep();
+        updateComboWarningVisibility();
       };
 
       const quantityField = document.createElement("div");
@@ -636,6 +778,7 @@ export const createProductCardBuilder = ({
         renderSummary();
         scheduleAnchoredCardsUpdate({ immediate: true });
         updateFavoriteIndicators();
+        updateComboWarningVisibility();
         placeAddButton();
         updateAddButtonVisibility();
         updateHeaderIconFromPrimaryVariant();
@@ -661,8 +804,8 @@ export const createProductCardBuilder = ({
       updateItemState(rowId, {
         productId: product.id,
         productName: product.name,
-        unit: effectivePreset.unit || fixedUnit || "",
-        variant: effectivePreset.variant || product.defaultVariant || "",
+        unit: unitSelect ? unitSelect.value : fixedUnit || "",
+        variant: variantSelect ? variantSelect.value : "",
         hasVariants: Boolean(product.variants.length),
         quantity: 0,
         quantityText: "",
@@ -676,6 +819,7 @@ export const createProductCardBuilder = ({
       scheduleMasonryUpdate();
       updateHeaderIconFromPrimaryVariant();
       updateRowIcon(row);
+      updateComboWarningVisibility();
       updateFavoriteIndicators();
     };
 
@@ -683,6 +827,7 @@ export const createProductCardBuilder = ({
 
     card.appendChild(titleRow);
     card.appendChild(rowsContainer);
+    card.appendChild(comboWarning);
     if (product.variants.length) {
       addRowButton.style.display = "none";
     }

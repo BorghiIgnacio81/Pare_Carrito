@@ -90,7 +90,12 @@ export const createOrderController = ({
     return Number.isFinite(row) ? row : null;
   };
 
-  const showSaveConfirmationModal = ({ sheetRowNumber, updatedRange, skippedItems = [] }) => {
+  const showSaveConfirmationModal = ({
+    sheetRowNumber,
+    updatedRange,
+    skippedItems = [],
+    verification = null,
+  }) => {
     if (!saveConfirmModal || !saveConfirmMessage) {
       return;
     }
@@ -100,15 +105,21 @@ export const createOrderController = ({
     const baseText = row
       ? `Pedido guardado en la línea ${row}.`
       : `Pedido guardado${updatedRange ? ` (${String(updatedRange).trim()})` : "."}`;
+    const sheetOk = verification?.sheet?.ok !== false;
+    const dbOk = verification?.db?.ok === true;
+    const verificationText = `Verificación: Sheet ${sheetOk ? "OK" : "ERROR"} | DB ${
+      dbOk ? "OK" : "ERROR"
+    }.`;
+
     const skipped = Array.isArray(skippedItems) ? skippedItems.filter(Boolean) : [];
     if (skipped.length) {
       const sample = skipped.slice(0, 3).join(", ");
       const extra = skipped.length > 3 ? `, ${skipped.length - 3} más` : "";
       saveConfirmMessage.textContent =
-        `${baseText} ` +
+        `${baseText} ${verificationText} ` +
         `No se cargaron ${skipped.length} productos por no existir en el Sheet: ${sample}${extra}.`;
     } else {
-      saveConfirmMessage.textContent = baseText;
+      saveConfirmMessage.textContent = `${baseText} ${verificationText}`;
     }
     saveConfirmModal.classList.remove("hidden");
   };
@@ -300,15 +311,32 @@ export const createOrderController = ({
           setSaveStatus("Guardando pedido en el Sheet…");
 
           const result = await appendOrderToSheet();
+          const verification = result?.verification || null;
+          const sheetOk = verification?.sheet?.ok !== false;
+          const dbOk = verification?.db?.ok === true;
+          if (!dbOk) {
+            const reason = String(verification?.db?.reason || result?.db?.reason || "error desconocido").trim();
+            setSaveStatus(
+              `⚠ Verificación: Sheet ${sheetOk ? "OK" : "ERROR"} | DB ERROR (${reason}).`,
+              "error"
+            );
+            alert(
+              `Pedido guardado en Google Sheet, pero NO en base de datos.\n\nDetalle: ${reason}\n\nEjecute reconciliación antes de continuar.`
+            );
+          }
           flashConfirmButtons("Guardado");
 
           const range = String(result?.updatedRange || "").trim();
-          setSaveStatus(range ? `Pedido guardado (${range})` : "Pedido guardado.", "success");
+          if (dbOk) {
+            const baseText = range ? `Pedido guardado (${range}).` : "Pedido guardado.";
+            setSaveStatus(`${baseText} Verificación: Sheet OK | DB OK.`, "success");
+          }
 
           showSaveConfirmationModal({
             sheetRowNumber: result?.sheetRowNumber,
             updatedRange: range,
             skippedItems: result?.skippedItems,
+            verification,
           });
         } catch (error) {
           const message = String(error?.message || error || "").trim();
