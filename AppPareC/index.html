@@ -28,53 +28,55 @@
         <div class="page-header__intro">
           <h1>Carga de pedidos</h1>
           <p>Formulario interno para registrar pedidos con múltiples productos.</p>
+
+          <div class="main-tabs" role="tablist" aria-label="Secciones principales">
+            <button
+              id="tab-create-orders"
+              type="button"
+              class="button-secondary tab-button tab-button--active"
+              role="tab"
+              aria-selected="true"
+            >
+              Crear
+            </button>
+            <button
+              id="tab-control-orders"
+              type="button"
+              class="button-secondary tab-button"
+              role="tab"
+              aria-selected="false"
+            >
+              Controlar
+            </button>
+            <button
+              id="tab-reparto-orders"
+              type="button"
+              class="button-secondary tab-button"
+              role="tab"
+              aria-selected="false"
+            >
+              Reparto
+            </button>
+          </div>
         </div>
 
         <div class="client-select client-select--top">
-          <div class="client-select__top-action">
-            <button id="update-tareas-pdf" type="button" class="button-secondary">
-              Actualizar tareas.pdf
-            </button>
-            <button id="update-imprimir-pedidos" type="button" class="button-secondary">
-              Actualizar imprimir pedidos
-            </button>
-          </div>
-          <label for="client-select">Cliente</label>
-          <div class="client-select__row">
-            <select id="client-select">
-              <option value="">Seleccione un cliente</option>
-            </select>
-            <div class="client-select__actions">
-              <button id="new-client" type="button" class="button-secondary">
-                Nuevo cliente
-              </button>
-              <button id="edit-client" type="button" class="button-secondary" disabled>
-                Editar cliente
-              </button>
+          <div id="client-controls-block">
+            <label for="client-select">Cliente</label>
+            <div class="client-select__row">
+              <select id="client-select">
+                <option value="">Seleccione un cliente</option>
+              </select>
+              <div class="client-select__actions">
+                <button id="new-client" type="button" class="button-secondary">
+                  Nuevo cliente
+                </button>
+                <button id="edit-client" type="button" class="button-secondary" disabled>
+                  Editar cliente
+                </button>
+              </div>
             </div>
           </div>
-
-          <label for="responsible-select">Responsable</label>
-          <div class="client-select__row">
-            <select id="responsible-select">
-              <option value="">Seleccione un responsable</option>
-            </select>
-            <div class="client-select__actions">
-              <button id="new-responsible" type="button" class="button-secondary">
-                Nuevo responsable
-              </button>
-              <button id="edit-responsible" type="button" class="button-secondary" disabled>
-                Editar responsable
-              </button>
-              <button id="assign-responsible" type="button" class="button-secondary" disabled>
-                Asignar
-              </button>
-              <button id="remove-responsible" type="button" class="button-secondary" disabled>
-                Quitar
-              </button>
-            </div>
-          </div>
-          <p id="responsible-assignment-status" class="save-status" aria-live="polite"></p>
         </div>
 
         <div class="page-header__logo" aria-label="Pare Carrito">
@@ -82,7 +84,7 @@
         </div>
       </div>
 
-      <div class="page-header__summary">
+      <div id="create-summary-pane" class="page-header__summary">
         <h3>Resumen del pedido</h3>
         <p id="summary-client" class="summary-client"></p>
         <div id="summary-content" class="summary-content">
@@ -109,7 +111,7 @@
     </header>
 
     <main>
-      <section aria-labelledby="pedido-title" class="card">
+      <section id="create-orders-pane" aria-labelledby="pedido-title" class="card">
         <h2 id="pedido-title">Productos del pedido</h2>
 
         <div class="toolbar">
@@ -236,11 +238,75 @@
         </div>
       </section>
 
-      <section aria-labelledby="salida-title" class="card">
-        <h2 id="salida-title">Salida preparada</h2>
-        <p>Esta estructura se enviará al backend en una etapa posterior.</p>
-        <pre id="order-output" class="order-output">{}</pre>
+      <section id="control-orders-pane" class="card hidden" aria-labelledby="control-orders-title">
+        <div class="control-orders__header">
+          <h2 id="control-orders-title">Controlar pedidos (hoy)</h2>
+          <button id="refresh-control-orders" type="button" class="button-secondary">Actualizar lista</button>
+        </div>
+        <div id="pdf-actions-block" class="client-select__top-action">
+          <div class="client-select__top-action-item">
+            <button id="update-tareas-pdf" type="button" class="button-secondary">
+              Actualizar tareas.pdf
+            </button>
+            <p id="update-tareas-pdf-status" class="save-status" aria-live="polite"></p>
+          </div>
+          <div class="client-select__top-action-item">
+            <button id="update-imprimir-pedidos" type="button" class="button-secondary">
+              Actualizar imprimir pedidos
+            </button>
+            <p id="update-imprimir-pedidos-status" class="save-status" aria-live="polite"></p>
+          </div>
+        </div>
+        <p id="control-orders-status" class="save-status" aria-live="polite"></p>
+
+        <div class="control-orders__table-wrap">
+          <table class="control-orders__table">
+            <thead>
+              <tr>
+                <th>Aprobado</th>
+                <th>Cliente</th>
+                <th>Items</th>
+                <th>Flete</th>
+                <th>Estado</th>
+                <th>Detalle</th>
+              </tr>
+            </thead>
+            <tbody id="control-orders-body">
+              <tr>
+                <td colspan="6">Sin datos.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
+
+      <section id="reparto-pane" class="card hidden" aria-labelledby="reparto-title">
+        <h2 id="reparto-title">Reparto</h2>
+        <p class="save-status">Gestión de responsables por cliente.</p>
+
+        <label for="responsible-select">Responsable</label>
+        <div class="client-select__row">
+          <select id="responsible-select">
+            <option value="">Seleccione un responsable</option>
+          </select>
+          <div class="client-select__actions">
+            <button id="new-responsible" type="button" class="button-secondary">
+              Nuevo responsable
+            </button>
+            <button id="edit-responsible" type="button" class="button-secondary" disabled>
+              Editar responsable
+            </button>
+            <button id="assign-responsible" type="button" class="button-secondary" disabled>
+              Asignar
+            </button>
+            <button id="remove-responsible" type="button" class="button-secondary" disabled>
+              Quitar
+            </button>
+          </div>
+        </div>
+        <p id="responsible-assignment-status" class="save-status" aria-live="polite"></p>
+      </section>
+
     </main>
 
     <script type="module" src="app.js"></script>

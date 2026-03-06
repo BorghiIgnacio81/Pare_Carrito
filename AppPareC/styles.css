@@ -129,6 +129,18 @@ body {
   margin-bottom: 4px;
 }
 
+.client-select__top-action-item {
+  display: grid;
+  gap: 4px;
+  min-width: 220px;
+}
+
+.client-select__top-action-item .save-status {
+  margin: 0;
+  min-height: 1.25rem;
+  text-align: center;
+}
+
 .client-select__row {
   display: flex;
   align-items: center;
@@ -223,6 +235,29 @@ main {
   padding: 0 32px 32px;
   display: grid;
   gap: 24px;
+}
+
+.main-tabs {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.tab-button {
+  min-width: 120px;
+}
+
+.tab-button--active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--card));
+  font-weight: 700;
+}
+
+#pdf-actions-block.hidden,
+#client-controls-block.hidden,
+#create-summary-pane.hidden {
+  display: none !important;
 }
 
 .card {
@@ -328,6 +363,148 @@ main {
 .toolbar button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.control-orders__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.control-orders__table-wrap {
+  overflow-x: auto;
+  padding-bottom: 260px;
+}
+
+.control-orders__table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.control-orders__table th,
+.control-orders__table td {
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.control-orders__table th:nth-child(1),
+.control-orders__table td:nth-child(1) {
+  width: 70px;
+  text-align: center;
+}
+
+.control-orders__table th:nth-child(2),
+.control-orders__table td:nth-child(2) {
+  width: 210px;
+}
+
+.control-orders__table th:nth-child(3),
+.control-orders__table td:nth-child(3) {
+  width: 80px;
+  text-align: center;
+}
+
+.control-orders__table th:nth-child(4),
+.control-orders__table td:nth-child(4) {
+  width: 120px;
+  text-align: center;
+}
+
+.control-orders__table th:nth-child(5),
+.control-orders__table td:nth-child(5) {
+  width: 160px;
+}
+
+.control-orders__table th:nth-child(6),
+.control-orders__table td:nth-child(6) {
+  width: auto;
+}
+
+.control-orders__table thead th {
+  background: #f7f7f7;
+}
+
+.control-orders__col-flete {
+  transition: background-color 0.15s ease;
+}
+
+.control-orders__col-flete--1 {
+  background: #f2b6b6;
+}
+
+.control-orders__col-flete--2 {
+  background: #ffe3f2;
+}
+
+.control-orders__flete-options {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.control-orders__flete-option {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: #222;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.control-orders__flete-option.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, #fff);
+}
+
+.control-orders__flete-option:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.control-orders__col-detail {
+  position: relative;
+  overflow: visible;
+}
+
+.control-orders__detail {
+  position: relative;
+  display: inline-block;
+}
+
+.control-orders__detail-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  width: min(560px, 56vw);
+  max-height: 300px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+}
+
+.control-orders__items {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.control-orders__items li {
+  margin: 0 0 4px;
+}
+
+.control-orders__toggle {
+  padding: 4px 10px;
+  font-size: 0.85rem;
 }
 
 .import-box {

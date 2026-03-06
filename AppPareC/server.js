@@ -7,6 +7,7 @@ import { google } from "googleapis";
 import { fileURLToPath } from "url";
 import { createPdfReportsController } from "./src/controllers/pdfReportsController.js";
 import { createMasterDataController } from "./src/controllers/masterDataController.js";
+import { todosClientColumnEntries } from "./src/constants/todosClientColumns.js";
 
 dotenv.config();
 
@@ -334,6 +335,194 @@ const fetchDivCompRanges = async () => {
   return { part1, part2, part3, part4 };
 };
 
+const formatDbQuantityText = (item) => {
+  const text = String(item?.quantityText || "").trim();
+  if (text) {
+    return text;
+  }
+  const quantity = Number(item?.quantity);
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    return "";
+  }
+  if (Number.isInteger(quantity)) {
+    return String(quantity);
+  }
+  return String(Math.round(quantity * 1000) / 1000).replace(".", ",");
+};
+
+const buildTasksRangesFromDb = ({ orders = [], clientResponsibleByExternalId = new Map() } = {}) => {
+  const safeOrders = Array.isArray(orders) ? orders : [];
+  const sectionProducts = new Map();
+
+  const toThreeDigits = (value) => {
+    const numeric = String(value ?? "").match(/\d{1,3}/)?.[0] || "";
+    if (!numeric) return "";
+    return String(Number(numeric)).padStart(3, "0");
+  };
+
+  const toClientLabel = (value) => {
+    const numeric = String(value ?? "").match(/\d{1,3}/)?.[0] || "";
+    if (!numeric) return String(value ?? "").trim();
+    return String(Number(numeric));
+  };
+
+  const formatQty = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) {
+      return "0";
+    }
+    return String(Math.round(num * 1000) / 1000).replace(".", ",");
+  };
+
+  const addToMap = (targetMap, productLabel, clientLabel, qty) => {
+    if (!targetMap.has(productLabel)) {
+      targetMap.set(productLabel, { total: 0, byClient: new Map() });
+    }
+    const entry = targetMap.get(productLabel);
+    entry.total += qty;
+    entry.byClient.set(clientLabel, Number(entry.byClient.get(clientLabel) || 0) + qty);
+  };
+
+  const toProductLine = (productLabel, entry) => {
+    const clientParts = Array.from(entry.byClient.entries())
+      .sort((a, b) => Number(a[0]) - Number(b[0]))
+      .map(([clientId, total]) => `${clientId}) ${formatQty(total)}`);
+    return `${productLabel}${clientParts.length ? ` / ${clientParts.join(" / ")}` : ""} = ${formatQty(entry.total)}`;
+  };
+
+  const buildSectionRows = (sectionName, sourceMap) => {
+    const map = sourceMap || new Map();
+    const products = Array.from(map.entries());
+    if (!products.length) {
+      return [];
+    }
+    const rows = [[sectionName]];
+    products.forEach(([productLabel, entry]) => {
+      rows.push([toProductLine(productLabel, entry)]);
+    });
+    return rows;
+  };
+
+  const filterMapByProduct = (sourceMap, predicate) => {
+    const out = new Map();
+    const map = sourceMap || new Map();
+    Array.from(map.entries()).forEach(([productLabel, entry]) => {
+      if (predicate(productLabel)) {
+        out.set(productLabel, entry);
+      }
+    });
+    return out;
+  };
+
+  safeOrders.forEach((order) => {
+    const rawClientId = String(order?.clientId || "").trim();
+    const normalizedClientId = toThreeDigits(rawClientId);
+    const clientLabel = toClientLabel(rawClientId || normalizedClientId);
+    if (!clientLabel) {
+      return;
+    }
+
+    const responsibleName =
+      String(clientResponsibleByExternalId.get(normalizedClientId) || "Sin responsable").trim() ||
+      "Sin responsable";
+
+    if (!sectionProducts.has(responsibleName)) {
+      sectionProducts.set(responsibleName, new Map());
+    }
+    const productMap = sectionProducts.get(responsibleName);
+
+    (Array.isArray(order?.items) ? order.items : []).forEach((item) => {
+      const productName = String(item?.productName || "").trim();
+      if (!productName) {
+        return;
+      }
+      const variant = String(item?.variant || "").trim();
+      const productLabel = `${productName}${variant && variant !== "Común" ? ` ${variant}` : ""}`.trim();
+
+      const qty = Number(item?.quantity);
+      if (!Number.isFinite(qty) || qty <= 0) {
+        return;
+      }
+
+      addToMap(productMap, productLabel, clientLabel, qty);
+    });
+  });
+
+  const part1 = buildSectionRows("Lucas", sectionProducts.get("Lucas"));
+  const part2 = buildSectionRows("Roberto", sectionProducts.get("Roberto"));
+
+  const beatrizMap = filterMapByProduct(
+    sectionProducts.get("Beatriz"),
+    (productLabel) => /naranja\s*jaula|lim[oó]n\s*jaula/i.test(String(productLabel || ""))
+  );
+  const part3 = buildSectionRows("Beatriz", beatrizMap);
+
+  const patoProductsMap = filterMapByProduct(
+    sectionProducts.get("Pato"),
+    (productLabel) => /palta|lima/i.test(String(productLabel || ""))
+  );
+  const patoByClient = new Map();
+  Array.from(patoProductsMap.values()).forEach((entry) => {
+    Array.from(entry.byClient.entries()).forEach(([clientId, qty]) => {
+      patoByClient.set(clientId, Number(patoByClient.get(clientId) || 0) + Number(qty || 0));
+    });
+  });
+  const part4 = patoByClient.size
+    ? [
+        ["Pato"],
+        ...Array.from(patoByClient.entries())
+          .sort((a, b) => Number(a[0]) - Number(b[0]))
+          .map(([clientId, qty]) => [`${clientId}) ${formatQty(qty)} Kg`]),
+      ]
+    : [];
+
+  return { part1, part2, part3, part4, sourceMode: "db" };
+};
+
+const fetchPrimaryResponsibleMapByClientExternalId = async () => {
+  const models = app.locals.dbModels;
+  if (!models?.responsibles || !models?.clientResponsibles) {
+    return new Map();
+  }
+
+  const responsibles = await models.responsibles.list({ includeInactive: false });
+  const map = new Map();
+
+  for (const responsible of responsibles) {
+    const assignments = await models.clientResponsibles.listByResponsible({
+      responsibleId: responsible.id,
+    });
+    (Array.isArray(assignments) ? assignments : []).forEach((assignment) => {
+      const externalId = String(assignment?.client_external_id || "").trim();
+      if (!externalId) {
+        return;
+      }
+      const normalizedExternalId = String(Number(externalId)).padStart(3, "0");
+      const current = map.get(normalizedExternalId);
+      const isPrimary = Boolean(assignment?.is_primary);
+      if (!current || isPrimary) {
+        map.set(normalizedExternalId, String(responsible?.name || "").trim() || "Sin responsable");
+      }
+    });
+  }
+
+  return map;
+};
+
+const fetchTasksRangesFromBackend = async () => {
+  const getOrders = app.locals.getOrdersForDate;
+  if (typeof getOrders !== "function") {
+    throw new Error("DB no inicializada para generar tareas.pdf desde backend.");
+  }
+
+  const [orders, responsibleMap] = await Promise.all([
+    getOrders({ date: new Date() }),
+    fetchPrimaryResponsibleMapByClientExternalId(),
+  ]);
+
+  return buildTasksRangesFromDb({ orders, clientResponsibleByExternalId: responsibleMap });
+};
+
 const replaceDateInRows = (rows, dateText) => {
   return (rows || []).map((row) =>
     (row || []).map((cell) => String(cell ?? "").replace(dateTokenRegex, dateText))
@@ -430,15 +619,58 @@ const buildTasksDocumentPayload = ({ part1, part2, part3, part4 }) => {
   const safePart2 = replaceDateInRows(part2, today);
   const safePart3 = replaceDateInRows(part3, today);
   const safePart4 = replaceDateInRows(part4, today);
-  const parts = [
-    rowsToPlainText(safePart1),
-    rowsToPlainText(safePart2),
-    rowsToPlainText(safePart3),
-    rowsToPlainText(safePart4),
+  const blockSpecs = [
+    { text: rowsToPlainText(safePart1), bold: false },
+    { text: rowsToPlainText(safePart2), bold: false },
+    { text: rowsToPlainText(safePart3), bold: true },
+    { text: rowsToPlainText(safePart4), bold: true },
   ];
 
-  const separators = "\n\n";
-  let text = parts.join(separators).trim();
+  const boldRanges = [];
+  let robertoStartOffset = null;
+  let text = "";
+  let cursor = 0;
+
+  const part1Text = String(blockSpecs[0]?.text || "");
+  const part2Text = String(blockSpecs[1]?.text || "");
+  const part3Text = String(blockSpecs[2]?.text || "");
+  const part4Text = String(blockSpecs[3]?.text || "");
+
+  if (part1Text) {
+    text += part1Text;
+    cursor += part1Text.length;
+  }
+
+  if (part2Text) {
+    if (text) {
+      text += "\n\n";
+      cursor += 2;
+    }
+    robertoStartOffset = cursor;
+    text += part2Text;
+    cursor += part2Text.length;
+  }
+
+  if (part3Text) {
+    const sep = "\n\n\n\n";
+    text += sep;
+    const part3Start = cursor + sep.length;
+    cursor += sep.length;
+    text += part3Text;
+    cursor += part3Text.length;
+    boldRanges.push({ start: part3Start, end: part3Start + part3Text.length });
+  }
+
+  if (part4Text) {
+    const sep = "\n\n\n";
+    text += sep;
+    const part4Start = cursor + sep.length;
+    cursor += sep.length;
+    text += part4Text;
+    cursor += part4Text.length;
+    boldRanges.push({ start: part4Start, end: part4Start + part4Text.length });
+  }
+
   text = text.replace(dateTokenRegex, today);
 
   const singleDateLineRegex = /^\s*\d{1,2}\s*[\/\.\-／⁄]\s*\d{1,2}\s*[\/\.\-／⁄]\s*\d{2,4}\s*$/;
@@ -449,28 +681,11 @@ const buildTasksDocumentPayload = ({ part1, part2, part3, part4 }) => {
     text = lines.join("\n");
   }
 
-  const lengths = parts.map((part) => part.length);
-  const offsets = [];
-  let cursor = 0;
-  lengths.forEach((len, index) => {
-    offsets.push({ start: cursor, end: cursor + len });
-    cursor += len;
-    if (index < lengths.length - 1) {
-      cursor += separators.length;
-    }
-  });
-
-  const boldRanges = [];
-  const part3Range = offsets[2];
-  const part4Range = offsets[3];
-  if (part3Range && part3Range.end > part3Range.start) {
-    boldRanges.push(part3Range);
-  }
-  if (part4Range && part4Range.end > part4Range.start) {
-    boldRanges.push(part4Range);
+  if (!String(text || "").length) {
+    text = "\n";
   }
 
-  return { text, boldRanges };
+  return { text, boldRanges, robertoStartOffset };
 };
 
 const normalizeClientId = (value) => {
@@ -511,12 +726,139 @@ const fetchClientNumbersFromTodos = async () => {
   return Array.from(used).sort();
 };
 
+const isTruthyTodosFlag = (value) => {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value === 1;
+  }
+  const text = String(value ?? "").trim().toLowerCase();
+  return text === "true" || text === "1" || text === "si" || text === "sí";
+};
+
+const dispatchRawToFleteOption = (value) => {
+  const target = normalizeDispatchTarget(value);
+  return target === "Kangoo" ? "Flete 2" : "Flete 1";
+};
+
+const fleteOptionToDispatchRaw = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "flete 2") {
+    return "Kangoo 1";
+  }
+  return "Trafic 1";
+};
+
+const fetchTodosControlStateByClient = async () => {
+  const sheets = await getSheetsClient();
+  const ranges = todosClientColumnEntries.map(
+    ({ column }) => `'${TODOS_SHEET_NAME}'!${column}1:${column}5`
+  );
+
+  const response = await sheets.spreadsheets.values.batchGet({
+    spreadsheetId: SPREADSHEET_ID,
+    ranges,
+    valueRenderOption: "UNFORMATTED_VALUE",
+    dateTimeRenderOption: "FORMATTED_STRING",
+  });
+
+  const valueRanges = Array.isArray(response?.data?.valueRanges) ? response.data.valueRanges : [];
+  const out = {};
+
+  todosClientColumnEntries.forEach(({ column, clientId }, index) => {
+    const values = Array.isArray(valueRanges[index]?.values) ? valueRanges[index].values : [];
+    const approvedRaw = values?.[0]?.[0];
+    const dispatchRaw = String(values?.[3]?.[0] ?? "").trim();
+    const clientLabel = String(values?.[4]?.[0] ?? "").trim();
+    const approved = isTruthyTodosFlag(approvedRaw);
+    const flete = dispatchRawToFleteOption(dispatchRaw);
+
+    out[clientId] = {
+      clientId,
+      column,
+      approved,
+      approvedRaw,
+      dispatchRaw,
+      dispatchTarget: normalizeDispatchTarget(dispatchRaw) || "Trafic",
+      flete,
+      clientLabel,
+      mapped: true,
+    };
+  });
+
+  return out;
+};
+
+const fetchActiveClientIdsFromTodos = async () => {
+  const stateByClient = await fetchTodosControlStateByClient();
+  return Object.values(stateByClient)
+    .filter((entry) => Boolean(entry?.approved))
+    .map((entry) => String(entry.clientId || "").trim())
+    .filter(Boolean)
+    .sort();
+};
+
+const normalizeDispatchTarget = (value) => {
+  const text = String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+  if (!text) {
+    return "";
+  }
+  if (text.includes("kangoo")) {
+    return "Kangoo";
+  }
+  if (text.includes("trafic") || text.includes("traffic")) {
+    return "Trafic";
+  }
+  return "";
+};
+
+const fetchTodosDispatchByClient = async () => {
+  const sheets = await getSheetsClient();
+  const ranges = todosClientColumnEntries.map(
+    ({ column }) => `'${TODOS_SHEET_NAME}'!${column}4:${column}5`
+  );
+
+  const response = await sheets.spreadsheets.values.batchGet({
+    spreadsheetId: SPREADSHEET_ID,
+    ranges,
+    valueRenderOption: "UNFORMATTED_VALUE",
+    dateTimeRenderOption: "FORMATTED_STRING",
+  });
+
+  const valueRanges = Array.isArray(response?.data?.valueRanges) ? response.data.valueRanges : [];
+  const out = {};
+
+  todosClientColumnEntries.forEach(({ column, clientId }, index) => {
+    const valueRange = valueRanges[index] || {};
+    const values = Array.isArray(valueRange.values) ? valueRange.values : [];
+    const dispatchRaw = String(values?.[0]?.[0] ?? "").trim();
+    const clientLabel = String(values?.[1]?.[0] ?? "").trim();
+    const dispatchTarget = normalizeDispatchTarget(dispatchRaw) || "Trafic";
+
+    out[clientId] = {
+      clientId,
+      column,
+      dispatchTarget,
+      dispatchRaw,
+      clientLabel,
+    };
+  });
+
+  return out;
+};
+
 const pdfReportsController = createPdfReportsController({
   getDocsClient,
   getDriveClient,
   TASKS_DOC_ID,
   PRINT_DOC_ID,
   fetchDivCompRanges,
+  fetchTasksRangesFromBackend,
   buildTasksDocumentPayload,
   extractDateTokensFromDocHeaderFooter,
   formatDate,
@@ -532,6 +874,15 @@ const pdfReportsController = createPdfReportsController({
   savePdfBufferInProject,
   TAREAS_PDF_DIR,
   IMPRIMIR_PEDIDOS_PDF_DIR,
+  fetchTodosDispatchByClient,
+  fetchActiveClientIdsFromTodos,
+  getOrdersForDate: async ({ date } = {}) => {
+    const getter = app.locals.getOrdersForDate;
+    if (typeof getter !== "function") {
+      return [];
+    }
+    return getter({ date });
+  },
 });
 
 const masterDataController = createMasterDataController({
@@ -669,6 +1020,105 @@ app.get("/api/orders", async (_req, res) => {
     res.json({ values, warning: warning || null });
   } catch (error) {
     res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+app.get("/api/control-orders/today", async (_req, res) => {
+  try {
+    const getOrders = app.locals.getOrdersForDate;
+    if (typeof getOrders !== "function") {
+      res.status(503).json({ ok: false, error: "DB no inicializada para listar pedidos del día." });
+      return;
+    }
+
+    const [orders, controlByClient] = await Promise.all([
+      getOrders({ date: new Date() }),
+      fetchTodosControlStateByClient(),
+    ]);
+
+    const data = (Array.isArray(orders) ? orders : []).map((order) => {
+      const clientId = String(order?.clientId || "").trim();
+      const control = controlByClient?.[clientId] || null;
+      const items = Array.isArray(order?.items) ? order.items : [];
+      return {
+        orderId: Number(order?.id) || null,
+        orderDate: order?.orderDate || null,
+        clientId,
+        clientName: String(order?.clientName || "").trim() || `Cliente ${clientId || "s/n"}`,
+        itemsCount: items.length,
+        items: items.map((item) => ({
+          id: Number(item?.id) || null,
+          productName: String(item?.productName || "").trim(),
+          quantity: Number.isFinite(Number(item?.quantity)) ? Number(item.quantity) : null,
+          quantityText: String(item?.quantityText || "").trim(),
+          unit: String(item?.unit || "").trim(),
+          variant: String(item?.variant || "").trim(),
+          notes: String(item?.notes || "").trim(),
+          position: Number(item?.position) || 0,
+        })),
+        approved: Boolean(control?.approved),
+        flete: String(control?.flete || "Flete 1"),
+        dispatchRaw: String(control?.dispatchRaw || ""),
+        mapped: Boolean(control?.mapped),
+        column: String(control?.column || ""),
+      };
+    });
+
+    res.json({ ok: true, date: new Date().toISOString(), data });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: String(error?.message || error) });
+  }
+});
+
+app.put("/api/control-orders/client/:clientId", async (req, res) => {
+  try {
+    const clientId = normalizeClientId(req?.params?.clientId);
+    if (!clientId) {
+      res.status(400).json({ ok: false, error: "clientId inválido." });
+      return;
+    }
+
+    const mapped = todosClientColumnEntries.find((entry) => entry.clientId === clientId) || null;
+    if (!mapped?.column) {
+      res.status(404).json({ ok: false, error: `Cliente ${clientId} no tiene columna mapeada en Todos.` });
+      return;
+    }
+
+    const approved = isTruthyTodosFlag(req?.body?.approved);
+    const flete = String(req?.body?.flete || "Flete 1").trim();
+    const dispatchRaw = fleteOptionToDispatchRaw(flete);
+
+    const sheets = await getSheetsClient();
+    const column = mapped.column;
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: {
+        valueInputOption: "USER_ENTERED",
+        data: [
+          {
+            range: `'${TODOS_SHEET_NAME}'!${column}1:${column}1`,
+            values: [[approved]],
+          },
+          {
+            range: `'${TODOS_SHEET_NAME}'!${column}4:${column}4`,
+            values: [[dispatchRaw]],
+          },
+        ],
+      },
+    });
+
+    res.json({
+      ok: true,
+      data: {
+        clientId,
+        column,
+        approved,
+        flete: dispatchRawToFleteOption(dispatchRaw),
+        dispatchRaw,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: String(error?.message || error) });
   }
 });
 
@@ -823,14 +1273,18 @@ const init = async () => {
     // Import the DB module as ESM; this file remains CommonJS for now.
     // Import DB module statically now that this project is ESM
     // Prefer the js file which is already ESM
-    const { ensureSchema, getModels, saveOrderRow } = await import("./src/db/postgres.js");
+    const { ensureSchema, getModels, saveOrderRow, getOrdersForDate } = await import(
+      "./src/db/postgres.js"
+    );
     await ensureSchema();
     app.locals.saveOrderRow = saveOrderRow;
+    app.locals.getOrdersForDate = getOrdersForDate;
     app.locals.dbModels = await getModels();
   } catch (error) {
     // eslint-disable-next-line no-console
     console.warn("Warning: could not initialize DB module:", String(error?.message || error));
     app.locals.saveOrderRow = null;
+    app.locals.getOrdersForDate = null;
     app.locals.dbModels = null;
   }
 

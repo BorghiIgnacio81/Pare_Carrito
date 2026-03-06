@@ -95,6 +95,38 @@ export const createOrdersApi = (options = {}) => {
       return data;
     },
 
+    listTodayControlOrders: async () => {
+      const url = `${baseUrl}/control-orders/today`;
+      const { response, data } = await fetchJson(url);
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudieron listar los pedidos del día.").trim();
+        throw new Error(msg || "No se pudieron listar los pedidos del día.");
+      }
+      return {
+        date: data?.date || null,
+        data: Array.isArray(data?.data) ? data.data : [],
+      };
+    },
+
+    updateTodayControlOrder: async ({ clientId, approved, flete } = {}) => {
+      const safeClientId = String(clientId || "").trim();
+      if (!safeClientId) {
+        throw new Error("Falta clientId para actualizar control de pedido.");
+      }
+
+      const url = `${baseUrl}/control-orders/client/${encodeURIComponent(safeClientId)}`;
+      const { response, data } = await fetchJson(url, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approved, flete }),
+      });
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudo actualizar el control del pedido.").trim();
+        throw new Error(msg || "No se pudo actualizar el control del pedido.");
+      }
+      return { data: data?.data || null };
+    },
+
     listDbClients: async ({ includeInactive = false } = {}) => {
       const q = includeInactive ? "?includeInactive=1" : "";
       const url = `${baseUrl}/db/clients${q}`;

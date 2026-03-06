@@ -4,6 +4,7 @@ export const createPdfReportsController = ({
   TASKS_DOC_ID,
   PRINT_DOC_ID,
   fetchDivCompRanges,
+  fetchTasksRangesFromBackend,
   buildTasksDocumentPayload,
   extractDateTokensFromDocHeaderFooter,
   formatDate,
@@ -19,7 +20,184 @@ export const createPdfReportsController = ({
   savePdfBufferInProject,
   TAREAS_PDF_DIR,
   IMPRIMIR_PEDIDOS_PDF_DIR,
+  fetchTodosDispatchByClient,
+  fetchActiveClientIdsFromTodos,
+  getOrdersForDate,
 }) => {
+  const columnToIndex = (column) => {
+    const text = String(column || "").trim().toUpperCase();
+    if (!text) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+    let acc = 0;
+    for (let i = 0; i < text.length; i += 1) {
+      const code = text.charCodeAt(i);
+      if (code < 65 || code > 90) {
+        return Number.MAX_SAFE_INTEGER;
+      }
+      acc = acc * 26 + (code - 64);
+    }
+    return acc;
+  };
+
+  const formatQty = (item) => {
+    const quantityText = String(item?.quantityText || "").trim();
+    if (quantityText) {
+      return quantityText;
+    }
+    const quantity = Number(item?.quantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      return "";
+    }
+    if (Number.isInteger(quantity)) {
+      return String(quantity);
+    }
+    return String(Math.round(quantity * 1000) / 1000).replace(".", ",");
+  };
+
+  const formatItemLine = (item) => {
+    const product = String(item?.productName || "Producto").trim() || "Producto";
+    const variant = String(item?.variant || "").trim();
+    const qty = formatQty(item);
+    const unit = String(item?.unit || "").trim();
+    const notes = String(item?.notes || "").trim();
+
+    const variantPart = variant && variant !== "Común" ? ` ${variant}` : "";
+    const qtyPart = qty ? ` - ${qty}${unit ? ` ${unit}` : ""}` : "";
+    const notePart = notes ? ` .${notes}` : "";
+    return `${product}${variantPart}${qtyPart}${notePart}`.trim();
+  };
+
+  const buildRouteRowsFromDb = ({ orders, dispatchByClient }) => {
+    const routes = {
+      Trafic: { clients: new Map(), productTotals: new Map() },
+      Kangoo: { clients: new Map(), productTotals: new Map() },
+    };
+
+    const addProductTotal = (route, productName, quantity) => {
+      const safeName = String(productName || "").trim();
+      if (!safeName) {
+        return;
+      }
+      const current = Number(route.productTotals.get(safeName) || 0);
+      const next = Number.isFinite(quantity) && quantity > 0 ? current + quantity : current;
+      route.productTotals.set(safeName, next);
+    };
+
+    (Array.isArray(orders) ? orders : []).forEach((order) => {
+      const clientId = String(order?.clientId || "").trim();
+      if (!clientId) {
+        return;
+      }
+
+      const routing = dispatchByClient?.[clientId] || null;
+      const target = routing?.dispatchTarget === "Kangoo" ? "Kangoo" : "Trafic";
+      const route = routes[target];
+      const clientName =
+        String(order?.clientName || "").trim() ||
+        String(routing?.clientLabel || "").trim() ||
+        `Cliente ${clientId}`;
+      const clientLabel = `${clientId}) ${clientName}`;
+      const clientSortIndex = columnToIndex(routing?.column || "");
+
+      if (!route.clients.has(clientLabel)) {
+        route.clients.set(clientLabel, { sortIndex: clientSortIndex, lines: [] });
+      }
+
+      const itemList = route.clients.get(clientLabel);
+      if (clientSortIndex < itemList.sortIndex) {
+        itemList.sortIndex = clientSortIndex;
+      }
+      (Array.isArray(order?.items) ? order.items : []).forEach((item) => {
+        itemList.lines.push(formatItemLine(item));
+        addProductTotal(route, item?.productName, Number(item?.quantity));
+      });
+    });
+
+    const toRows = (routeData) => {
+      const fleteRows = [];
+      const orderedClients = Array.from(routeData.clients.entries())
+        .map(([client, meta]) => ({ client, sortIndex: meta.sortIndex, lines: meta.lines }))
+        .sort((a, b) => {
+          const diff = Number(a.sortIndex) - Number(b.sortIndex);
+          if (diff !== 0) {
+            return diff;
+          }
+          return a.client.localeCompare(b.client, "es");
+        });
+
+      orderedClients.forEach(({ client, lines }) => {
+        fleteRows.push([client]);
+        lines.forEach((line) => fleteRows.push([line]));
+        fleteRows.push([]);
+      });
+
+      const sumaRows = Array.from(routeData.productTotals.entries())
+        .filter(([, total]) => Number(total) > 0)
+        .sort((a, b) => String(a[0] || "").localeCompare(String(b[0] || ""), "es"))
+        .map(([product, total]) => [product, String(Math.round(total * 1000) / 1000).replace(".", ",")]);
+
+      return { fleteRows, sumaRows };
+    };
+
+    const trafic = toRows(routes.Trafic);
+    const kangoo = toRows(routes.Kangoo);
+
+    return {
+      flete1Rows: trafic.fleteRows,
+      suma1Rows: trafic.sumaRows,
+      flete2Rows: kangoo.fleteRows,
+      suma2Rows: kangoo.sumaRows,
+      hasFlete2: kangoo.fleteRows.length > 0,
+      sourceMode: "db+todos-routing",
+    };
+  };
+
+  const getPrintSourceRows = async () => {
+    const canUseDbMode =
+      typeof getOrdersForDate === "function" && typeof fetchTodosDispatchByClient === "function";
+
+    if (canUseDbMode) {
+      try {
+        const [orders, dispatchByClient, activeClientIds] = await Promise.all([
+          getOrdersForDate({ date: new Date() }),
+          fetchTodosDispatchByClient(),
+          typeof fetchActiveClientIdsFromTodos === "function"
+            ? fetchActiveClientIdsFromTodos()
+            : Promise.resolve([]),
+        ]);
+        const activeSet = new Set(
+          (Array.isArray(activeClientIds) ? activeClientIds : []).map((id) => String(id).trim())
+        );
+        const filteredOrders = Array.isArray(orders)
+          ? orders.filter((order) => activeSet.has(String(order?.clientId || "").trim()))
+          : [];
+        const dbRows = buildRouteRowsFromDb({ orders: filteredOrders, dispatchByClient });
+        if (dbRows.flete1Rows.length || dbRows.flete2Rows.length) {
+          return dbRows;
+        }
+      } catch {
+      }
+    }
+
+    const [traficA, traficGH, kangooA, kangooGH, kangooA4] = await Promise.all([
+      fetchRangeRows(PRINT_SHEET_TRAFFIC, "A4:A2000"),
+      fetchRangeRows(PRINT_SHEET_TRAFFIC, "G6:H2000"),
+      fetchRangeRows(PRINT_SHEET_KANGOO, "A4:A2000"),
+      fetchRangeRows(PRINT_SHEET_KANGOO, "G6:H2000"),
+      fetchSingleCell(PRINT_SHEET_KANGOO, "A4"),
+    ]);
+
+    return {
+      flete1Rows: sliceToThirdEmpty([...traficA, [], [], []]),
+      suma1Rows: sliceToFirstEmpty([...traficGH, []]),
+      flete2Rows: sliceToThirdEmpty([...kangooA, [], [], []]),
+      suma2Rows: sliceToFirstEmpty([...kangooGH, []]),
+      hasFlete2: String(kangooA4 ?? "").trim() !== "#N/A",
+      sourceMode: "legacy-sheets",
+    };
+  };
+
   const handleTareasPdf = async (req, res) => {
     try {
       const today = formatDate(new Date());
@@ -28,7 +206,38 @@ export const createPdfReportsController = ({
         return;
       }
 
-      const ranges = await fetchDivCompRanges();
+      const hasRowsContent = (rows) => {
+        const list = Array.isArray(rows) ? rows : [];
+        return list.some((row) => {
+          if (Array.isArray(row)) {
+            return row.some((cell) => String(cell ?? "").trim());
+          }
+          return String(row ?? "").trim().length > 0;
+        });
+      };
+
+      const hasRangesContent = (candidate) => {
+        if (!candidate || typeof candidate !== "object") {
+          return false;
+        }
+        return ["part1", "part2", "part3", "part4"].some((key) => hasRowsContent(candidate[key]));
+      };
+
+      let ranges = null;
+      let backendRanges = null;
+      if (typeof fetchTasksRangesFromBackend === "function") {
+        try {
+          backendRanges = await fetchTasksRangesFromBackend();
+        } catch {
+          backendRanges = null;
+        }
+      }
+
+      if (hasRangesContent(backendRanges)) {
+        ranges = backendRanges;
+      } else {
+        ranges = await fetchDivCompRanges();
+      }
       const payload = buildTasksDocumentPayload(ranges);
 
       const docs = await getDocsClient();
@@ -83,8 +292,48 @@ export const createPdfReportsController = ({
         requestBody: { requests },
       });
 
-      const refreshedDoc = await docs.documents.get({ documentId: TASKS_DOC_ID });
-      const dateTokens = extractDateTokensFromDocHeaderFooter(refreshedDoc).filter(
+      const robertoStartOffset = Number(payload?.robertoStartOffset);
+      const robertoStartIndex =
+        Number.isFinite(robertoStartOffset) && robertoStartOffset > 0
+          ? 1 + robertoStartOffset
+          : null;
+
+      if (robertoStartIndex && robertoStartIndex > 1) {
+        await docs.documents.batchUpdate({
+          documentId: TASKS_DOC_ID,
+          requestBody: {
+            requests: [
+              {
+                insertPageBreak: {
+                  location: { index: robertoStartIndex },
+                },
+              },
+            ],
+          },
+        });
+      } else {
+        const refreshedDoc = await docs.documents.get({ documentId: TASKS_DOC_ID });
+        const robertoSectionMarker = findMarkerRange(refreshedDoc, [
+          /(^|\n)\s*Roberto(?:\t|\s|$)/i,
+        ]);
+        if (robertoSectionMarker?.startIndex && robertoSectionMarker.startIndex > 1) {
+          await docs.documents.batchUpdate({
+            documentId: TASKS_DOC_ID,
+            requestBody: {
+              requests: [
+                {
+                  insertPageBreak: {
+                    location: { index: robertoSectionMarker.startIndex },
+                  },
+                },
+              ],
+            },
+          });
+        }
+      }
+
+      const docAfterPageBreak = await docs.documents.get({ documentId: TASKS_DOC_ID });
+      const dateTokens = extractDateTokensFromDocHeaderFooter(docAfterPageBreak).filter(
         (token) => token && token !== today
       );
       if (dateTokens.length) {
@@ -119,6 +368,7 @@ export const createPdfReportsController = ({
         });
         res.json({
           ok: true,
+          sourceMode: String(ranges?.sourceMode || "legacy-sheets"),
           savedAt: {
             filePath: saved.filePath,
           },
@@ -137,29 +387,22 @@ export const createPdfReportsController = ({
 
   const handleImprimirPedidosPdf = async (req, res) => {
     try {
+      const today = formatDate(new Date());
       if (!PRINT_DOC_ID) {
         res.status(500).send("Missing IMPRESION_DOC_ID/PRINT_DOC_ID.");
         return;
       }
-
-      const [traficA, traficGH, kangooA, kangooGH, kangooA4] = await Promise.all([
-        fetchRangeRows(PRINT_SHEET_TRAFFIC, "A4:A2000"),
-        fetchRangeRows(PRINT_SHEET_TRAFFIC, "G6:H2000"),
-        fetchRangeRows(PRINT_SHEET_KANGOO, "A4:A2000"),
-        fetchRangeRows(PRINT_SHEET_KANGOO, "G6:H2000"),
-        fetchSingleCell(PRINT_SHEET_KANGOO, "A4"),
-      ]);
-
-      const flete1Rows = sliceToThirdEmpty([...traficA, [], [], []]);
-      const suma1Rows = sliceToFirstEmpty([...traficGH, []]);
-      const flete2Rows = sliceToThirdEmpty([...kangooA, [], [], []]);
-      const suma2Rows = sliceToFirstEmpty([...kangooGH, []]);
+      const printSourceRows = await getPrintSourceRows();
+      const flete1Rows = printSourceRows.flete1Rows;
+      const suma1Rows = printSourceRows.suma1Rows;
+      const flete2Rows = printSourceRows.flete2Rows;
+      const suma2Rows = printSourceRows.suma2Rows;
 
       const flete1Text = rowsToPlainText(flete1Rows);
       const suma1Text = rowsToPlainText(suma1Rows);
       const flete2Text = rowsToPlainText(flete2Rows);
       const suma2Text = rowsToPlainText(suma2Rows);
-      const hasFlete2 = String(kangooA4 ?? "").trim() !== "#N/A";
+      const hasFlete2 = Boolean(printSourceRows.hasFlete2);
 
       const docs = await getDocsClient();
       let doc = await docs.documents.get({ documentId: PRINT_DOC_ID });
@@ -359,6 +602,27 @@ export const createPdfReportsController = ({
       }
 
       const drive = await getDriveClient();
+      const refreshedDoc = await docs.documents.get({ documentId: PRINT_DOC_ID });
+      const dateTokens = extractDateTokensFromDocHeaderFooter(refreshedDoc).filter(
+        (token) => token && token !== today
+      );
+      if (dateTokens.length) {
+        await docs.documents.batchUpdate({
+          documentId: PRINT_DOC_ID,
+          requestBody: {
+            requests: dateTokens.map((token) => ({
+              replaceAllText: {
+                containsText: {
+                  text: token,
+                  matchCase: true,
+                },
+                replaceText: today,
+              },
+            })),
+          },
+        });
+      }
+
       const pdf = await drive.files.export(
         { fileId: PRINT_DOC_ID, mimeType: "application/pdf" },
         { responseType: "arraybuffer" }
@@ -373,6 +637,7 @@ export const createPdfReportsController = ({
         });
         res.json({
           ok: true,
+          sourceMode: printSourceRows.sourceMode,
           savedAt: {
             filePath: saved.filePath,
           },

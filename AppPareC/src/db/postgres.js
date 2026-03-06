@@ -669,6 +669,99 @@ const migrateRawOrdersToNormalized = async ({ limit = 0 } = {}) => {
   };
 };
 
+const toIsoDate = (value) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  const year = String(date.getFullYear());
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const getOrdersForDate = async ({ date = new Date() } = {}) => {
+  const p = getPool();
+  if (!p) {
+    return [];
+  }
+
+  await ensureSchema();
+
+  const isoDate = toIsoDate(date);
+  if (!isoDate) {
+    return [];
+  }
+
+  const result = await p.query(
+    `
+      SELECT
+        o.id AS order_id,
+        o.order_date,
+        o.created_at,
+        o.raw_client_text,
+        c.external_id AS client_external_id,
+        c.name AS client_name,
+        oi.id AS item_id,
+        oi.product_name_text,
+        oi.quantity,
+        oi.quantity_text,
+        oi.unit,
+        oi.variant,
+        oi.notes,
+        oi.position,
+        oi.source_column_index
+      FROM orders o
+      LEFT JOIN clients c ON c.id = o.client_id
+      LEFT JOIN order_items oi ON oi.order_id = o.id
+      WHERE o.source = 'sheet'
+        AND COALESCE(o.order_date::date, o.created_at::date) = $1::date
+      ORDER BY o.id ASC, oi.position ASC, oi.id ASC;
+    `,
+    [isoDate]
+  );
+
+  const byOrderId = new Map();
+  (Array.isArray(result?.rows) ? result.rows : []).forEach((row) => {
+    const orderId = Number(row.order_id);
+    if (!Number.isFinite(orderId)) {
+      return;
+    }
+
+    if (!byOrderId.has(orderId)) {
+      const externalId = normalizeClientExternalId(
+        String(row.client_external_id || row.raw_client_text || "")
+      );
+      byOrderId.set(orderId, {
+        id: orderId,
+        orderDate: row.order_date || row.created_at || null,
+        clientId: externalId,
+        clientName: String(row.client_name || "").trim() || String(row.raw_client_text || "").trim(),
+        items: [],
+      });
+    }
+
+    if (!row.item_id) {
+      return;
+    }
+
+    const order = byOrderId.get(orderId);
+    order.items.push({
+      id: Number(row.item_id),
+      productName: String(row.product_name_text || "").trim(),
+      quantity: row.quantity != null ? Number(row.quantity) : null,
+      quantityText: String(row.quantity_text || "").trim(),
+      unit: String(row.unit || "").trim(),
+      variant: String(row.variant || "").trim(),
+      notes: String(row.notes || "").trim(),
+      position: Number(row.position) || 0,
+      sourceColumnIndex: Number(row.source_column_index) || null,
+    });
+  });
+
+  return Array.from(byOrderId.values());
+};
+
 const saveOrderRow = async ({ sheetName, updatedRange, row, headers = [] }) => {
   const p = getPool();
   if (!p) {
@@ -752,4 +845,11 @@ const saveOrderRow = async ({ sheetName, updatedRange, row, headers = [] }) => {
   }
 };
 
-export { getPool, ensureSchema, saveOrderRow, getModels, migrateRawOrdersToNormalized };
+export {
+  getPool,
+  ensureSchema,
+  saveOrderRow,
+  getModels,
+  migrateRawOrdersToNormalized,
+  getOrdersForDate,
+};

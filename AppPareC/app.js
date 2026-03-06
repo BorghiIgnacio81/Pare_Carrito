@@ -32,6 +32,7 @@ import { createSummaryController } from "./src/ui/summary.js";
 import { createImportBoxController } from "./src/ui/importBox.js";
 import { createImportApplier } from "./src/ui/importApply.js";
 import { createLayoutController } from "./src/ui/layout.js";
+import { createControlOrdersTab } from "./src/ui/controlOrdersTab.js";
 import { createFavoritesIndicators } from "./src/ui/favoritesIndicators.js";
 import { createProductCardBuilder } from "./src/ui/productCard.js";
 import {
@@ -128,6 +129,20 @@ const aliasCommentInput = document.querySelector("#alias-comment");
 const aliasSaveButton = document.querySelector("#alias-save");
 const updateTareasPdfButton = document.querySelector("#update-tareas-pdf");
 const updateImprimirPedidosButton = document.querySelector("#update-imprimir-pedidos");
+const updateTareasPdfStatus = document.querySelector("#update-tareas-pdf-status");
+const updateImprimirPedidosStatus = document.querySelector("#update-imprimir-pedidos-status");
+const tabCreateOrdersButton = document.querySelector("#tab-create-orders");
+const tabControlOrdersButton = document.querySelector("#tab-control-orders");
+const tabRepartoOrdersButton = document.querySelector("#tab-reparto-orders");
+const createOrdersPane = document.querySelector("#create-orders-pane");
+const controlOrdersPane = document.querySelector("#control-orders-pane");
+const repartoPane = document.querySelector("#reparto-pane");
+const refreshControlOrdersButton = document.querySelector("#refresh-control-orders");
+const controlOrdersBody = document.querySelector("#control-orders-body");
+const controlOrdersStatus = document.querySelector("#control-orders-status");
+const clientControlsBlock = document.querySelector("#client-controls-block");
+const pdfActionsBlock = document.querySelector("#pdf-actions-block");
+const createSummaryPane = document.querySelector("#create-summary-pane");
 
 const setSaveStatusMessage = (message, state = "") => {
   if (!saveStatus) {
@@ -139,6 +154,19 @@ const setSaveStatusMessage = (message, state = "") => {
     saveStatus.classList.add("save-status--success");
   } else if (state === "error") {
     saveStatus.classList.add("save-status--error");
+  }
+};
+
+const setButtonStatusMessage = (node, message, state = "") => {
+  if (!node) {
+    return;
+  }
+  node.textContent = String(message || "");
+  node.classList.remove("save-status--success", "save-status--error");
+  if (state === "success") {
+    node.classList.add("save-status--success");
+  } else if (state === "error") {
+    node.classList.add("save-status--error");
   }
 };
 
@@ -1476,6 +1504,35 @@ const initApp = async () => {
     ordersApi,
   });
 
+  const controlOrdersTabController = createControlOrdersTab({
+    ordersApi,
+    tabCreateButton: tabCreateOrdersButton,
+    tabControlButton: tabControlOrdersButton,
+    tabRepartoButton: tabRepartoOrdersButton,
+    createPane: createOrdersPane,
+    controlPane: controlOrdersPane,
+    repartoPane,
+    clientControlsBlock,
+    pdfActionsBlock,
+    createSummaryPane,
+    onTabChanged: (tabName) => {
+      if (tabName !== "create") {
+        return;
+      }
+      requestAnimationFrame(() => {
+        layoutController.scheduleCoverageUpdate();
+        layoutController.scheduleMasonryUpdate();
+        requestAnimationFrame(() => {
+          layoutController.scheduleCoverageUpdate();
+          layoutController.scheduleMasonryUpdate();
+        });
+      });
+    },
+    refreshButton: refreshControlOrdersButton,
+    tableBody: controlOrdersBody,
+    statusNode: controlOrdersStatus,
+  });
+
   const importApplier = createImportApplier({
     getProductsById: () => productsById,
     getCardByProductId: () => cardByProductId,
@@ -1565,7 +1622,7 @@ const initApp = async () => {
       return;
     }
     updateTareasPdfButton.disabled = true;
-    setSaveStatusMessage("Generando tareas.pdf...");
+    setButtonStatusMessage(updateTareasPdfStatus, "Generando tareas.pdf...");
     try {
       const response = await fetch("/api/tareas/pdf?saveInProject=1");
       if (!response.ok) {
@@ -1574,7 +1631,8 @@ const initApp = async () => {
       }
       const data = await response.json();
       const savedPath = String(data?.savedAt?.filePath || "");
-      setSaveStatusMessage(
+      setButtonStatusMessage(
+        updateTareasPdfStatus,
         savedPath
           ? `tareas.pdf guardado en: ${savedPath}`
           : "tareas.pdf actualizado.",
@@ -1582,7 +1640,7 @@ const initApp = async () => {
       );
     } catch (error) {
       console.error(error);
-      setSaveStatusMessage("No se pudo generar tareas.pdf.", "error");
+      setButtonStatusMessage(updateTareasPdfStatus, "No se pudo generar tareas.pdf.", "error");
     } finally {
       updateTareasPdfButton.disabled = false;
     }
@@ -1593,7 +1651,7 @@ const initApp = async () => {
       return;
     }
     updateImprimirPedidosButton.disabled = true;
-    setSaveStatusMessage("Generando imprimir pedidos...");
+    setButtonStatusMessage(updateImprimirPedidosStatus, "Generando imprimir pedidos...");
     try {
       const response = await fetch("/api/imprimir-pedidos/pdf?saveInProject=1");
       if (!response.ok) {
@@ -1602,7 +1660,8 @@ const initApp = async () => {
       }
       const data = await response.json();
       const savedPath = String(data?.savedAt?.filePath || "");
-      setSaveStatusMessage(
+      setButtonStatusMessage(
+        updateImprimirPedidosStatus,
         savedPath
           ? `imprimir pedidos guardado en: ${savedPath}`
           : "imprimir pedidos actualizado.",
@@ -1610,7 +1669,11 @@ const initApp = async () => {
       );
     } catch (error) {
       console.error(error);
-      setSaveStatusMessage("No se pudo generar imprimir pedidos.", "error");
+      setButtonStatusMessage(
+        updateImprimirPedidosStatus,
+        "No se pudo generar imprimir pedidos.",
+        "error"
+      );
     } finally {
       updateImprimirPedidosButton.disabled = false;
     }
@@ -1795,6 +1858,11 @@ const initApp = async () => {
       await responsiblesController.init();
     } catch (err) {
       console.warn("responsiblesController init failed:", err);
+    }
+    try {
+      controlOrdersTabController.init();
+    } catch (err) {
+      console.warn("controlOrdersTabController init failed:", err);
     }
     syncPasteToggleVisibility();
     try {
