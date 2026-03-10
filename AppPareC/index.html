@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Pedido - Carga rápida</title>
+    <link rel="icon" type="image/png" href="assets/pare-carrito-logo.png" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -28,36 +29,6 @@
         <div class="page-header__intro">
           <h1>Carga de pedidos</h1>
           <p>Formulario interno para registrar pedidos con múltiples productos.</p>
-
-          <div class="main-tabs" role="tablist" aria-label="Secciones principales">
-            <button
-              id="tab-create-orders"
-              type="button"
-              class="button-secondary tab-button tab-button--active"
-              role="tab"
-              aria-selected="true"
-            >
-              Crear
-            </button>
-            <button
-              id="tab-control-orders"
-              type="button"
-              class="button-secondary tab-button"
-              role="tab"
-              aria-selected="false"
-            >
-              Controlar
-            </button>
-            <button
-              id="tab-reparto-orders"
-              type="button"
-              class="button-secondary tab-button"
-              role="tab"
-              aria-selected="false"
-            >
-              Reparto
-            </button>
-          </div>
         </div>
 
         <div class="client-select client-select--top">
@@ -111,8 +82,54 @@
     </header>
 
     <main>
-      <section id="create-orders-pane" aria-labelledby="pedido-title" class="card">
-        <h2 id="pedido-title">Productos del pedido</h2>
+      <div class="main-tabs-shell">
+        <div class="main-tabs" role="tablist" aria-label="Secciones principales">
+          <button
+            id="tab-create-orders"
+            type="button"
+            class="button-secondary tab-button tab-button--active"
+            role="tab"
+            aria-selected="true"
+          >
+            Crear
+          </button>
+          <button
+            id="tab-control-orders"
+            type="button"
+            class="button-secondary tab-button"
+            role="tab"
+            aria-selected="false"
+          >
+            Controlar
+          </button>
+          <button
+            id="tab-reparto-orders"
+            type="button"
+            class="button-secondary tab-button"
+            role="tab"
+            aria-selected="false"
+          >
+            Reparto
+          </button>
+        </div>
+      </div>
+
+      <section id="create-orders-pane" aria-labelledby="pedido-title" class="card tab-pane">
+        <div class="pedido-header">
+          <div class="pedido-header__left">
+            <h2 id="pedido-title">Productos del pedido</h2>
+            <button id="toggle-grid-view" type="button" class="button-secondary">
+              Cambiar Vista Grilla
+            </button>
+          </div>
+          <div class="category-legend" aria-label="Leyenda de categorías">
+            <span class="category-legend__item"><span class="category-legend__swatch category-legend__swatch--verduras"></span>Verduras</span>
+            <span class="category-legend__item"><span class="category-legend__swatch category-legend__swatch--frutas"></span>Frutas</span>
+            <span class="category-legend__item"><span class="category-legend__swatch category-legend__swatch--aromaticas"></span>Aromáticas</span>
+            <span class="category-legend__item"><span class="category-legend__swatch category-legend__swatch--frutos"></span>Frutos secos y granos</span>
+            <span class="category-legend__item"><span class="category-legend__swatch category-legend__swatch--otros"></span>Otros</span>
+          </div>
+        </div>
 
         <div class="toolbar">
           <div class="search-inline">
@@ -238,10 +255,19 @@
         </div>
       </section>
 
-      <section id="control-orders-pane" class="card hidden" aria-labelledby="control-orders-title">
+      <section id="control-orders-pane" class="card tab-pane hidden" aria-labelledby="control-orders-title">
         <div class="control-orders__header">
-          <h2 id="control-orders-title">Controlar pedidos (hoy)</h2>
-          <button id="refresh-control-orders" type="button" class="button-secondary">Actualizar lista</button>
+          <h2 id="control-orders-title">Controlar pedidos</h2>
+          <div class="control-orders__header-actions">
+            <label for="control-orders-date" class="control-orders__date-label">Fecha</label>
+            <select id="control-orders-date" class="control-orders__date-select">
+              <option value="">Hoy</option>
+            </select>
+            <button id="control-orders-only-current" type="button" class="button-secondary">
+              Solo Actuales
+            </button>
+            <button id="refresh-control-orders" type="button" class="button-secondary">Actualizar lista</button>
+          </div>
         </div>
         <div id="pdf-actions-block" class="client-select__top-action">
           <div class="client-select__top-action-item">
@@ -263,12 +289,12 @@
           <table class="control-orders__table">
             <thead>
               <tr>
-                <th>Aprobado</th>
-                <th>Cliente</th>
-                <th>Items</th>
-                <th>Flete</th>
-                <th>Estado</th>
-                <th>Detalle</th>
+                <th data-sort-key="approved">Aprobado</th>
+                <th data-sort-key="client">Cliente</th>
+                <th data-sort-key="items">Items</th>
+                <th data-sort-key="flete">Flete</th>
+                <th data-sort-key="status">Estado</th>
+                <th data-sort-key="detail">Detalle</th>
               </tr>
             </thead>
             <tbody id="control-orders-body">
@@ -280,7 +306,7 @@
         </div>
       </section>
 
-      <section id="reparto-pane" class="card hidden" aria-labelledby="reparto-title">
+      <section id="reparto-pane" class="card tab-pane hidden" aria-labelledby="reparto-title">
         <h2 id="reparto-title">Reparto</h2>
         <p class="save-status">Gestión de responsables por cliente.</p>
 
@@ -305,6 +331,25 @@
           </div>
         </div>
         <p id="responsible-assignment-status" class="save-status" aria-live="polite"></p>
+
+        <p id="reparto-products-status" class="save-status" aria-live="polite"></p>
+        <div class="control-orders__table-wrap">
+          <table class="control-orders__table reparto-products__table">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Detalle (clientes)</th>
+                <th>Responsable</th>
+                <th>Totales</th>
+              </tr>
+            </thead>
+            <tbody id="reparto-products-body">
+              <tr>
+                <td colspan="4">Seleccione un responsable para ver productos.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
     </main>
@@ -333,6 +378,27 @@
         <div class="actions">
           <button id="save-partial-yes" type="button">Sí, cargar el resto</button>
           <button id="save-partial-no" type="button" class="button-secondary">No</button>
+        </div>
+      </div>
+    </div>
+
+    <div
+      id="control-only-current-modal"
+      class="modal hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="control-only-current-title"
+    >
+      <div class="modal__dialog">
+        <h3 id="control-only-current-title" class="modal__title">
+          <span>Confirmar acción</span>
+        </h3>
+        <p id="control-only-current-message" class="modal__message">
+          Se marcará en hoja Todos: true para clientes con pedido de hoy y false para el resto.
+        </p>
+        <div class="actions">
+          <button id="control-only-current-confirm" type="button">Aplicar</button>
+          <button id="control-only-current-cancel" type="button" class="button-secondary">Cancelar</button>
         </div>
       </div>
     </div>

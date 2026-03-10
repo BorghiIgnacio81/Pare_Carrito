@@ -484,6 +484,12 @@ main {
   flex: 1;
 }
 
+.control-orders__item-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .control-orders__item-action {
   width: 24px;
   height: 24px;
@@ -503,9 +509,21 @@ main {
   vertical-align: middle;
 }
 
+.icon-trash {
+  display: inline-block;
+  line-height: 1;
+  vertical-align: middle;
+}
+
 .control-orders__item-action--edit {
   background: #facc15;
   color: #222;
+}
+
+.control-orders__item-action--delete {
+  background: #dc2626;
+  color: #fff;
+  border-color: #b91c1c;
 }
 
 .control-orders__item-action--add {

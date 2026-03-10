@@ -104,8 +104,110 @@ export const createOrdersApi = (options = {}) => {
       }
       return {
         date: data?.date || null,
+        dateKey: data?.dateKey || null,
         data: Array.isArray(data?.data) ? data.data : [],
       };
+    },
+
+    listControlOrdersByDate: async ({ date } = {}) => {
+      const safeDate = String(date || "").trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(safeDate)) {
+        throw new Error("Fecha inválida. Use formato YYYY-MM-DD.");
+      }
+      const url = `${baseUrl}/control-orders/date/${encodeURIComponent(safeDate)}`;
+      const { response, data } = await fetchJson(url);
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudieron listar los pedidos de la fecha elegida.").trim();
+        throw new Error(msg || "No se pudieron listar los pedidos de la fecha elegida.");
+      }
+      return {
+        date: data?.date || null,
+        dateKey: data?.dateKey || safeDate,
+        data: Array.isArray(data?.data) ? data.data : [],
+      };
+    },
+
+    listControlOrderDates: async ({ limit = 60 } = {}) => {
+      const safeLimit = Math.max(1, Math.min(365, Number(limit) || 60));
+      const url = `${baseUrl}/control-orders/dates?limit=${encodeURIComponent(String(safeLimit))}`;
+      const { response, data } = await fetchJson(url);
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudieron listar fechas con pedidos.").trim();
+        throw new Error(msg || "No se pudieron listar fechas con pedidos.");
+      }
+      return { data: Array.isArray(data?.data) ? data.data : [] };
+    },
+
+    updateControlOrderItem: async ({ orderId, itemId, quantityText, unit } = {}) => {
+      const safeOrderId = Number(orderId);
+      const safeItemId = Number(itemId);
+      if (!Number.isFinite(safeOrderId) || safeOrderId <= 0) {
+        throw new Error("orderId inválido para editar producto.");
+      }
+      if (!Number.isFinite(safeItemId) || safeItemId <= 0) {
+        throw new Error("itemId inválido para editar producto.");
+      }
+
+      const url = `${baseUrl}/control-orders/order/${encodeURIComponent(String(safeOrderId))}/item/${encodeURIComponent(
+        String(safeItemId)
+      )}`;
+      const { response, data } = await fetchJson(url, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quantityText, unit }),
+      });
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudo editar producto del pedido.").trim();
+        throw new Error(msg || "No se pudo editar producto del pedido.");
+      }
+      return { data: data?.data || null };
+    },
+
+    deleteControlOrderItem: async ({ orderId, itemId } = {}) => {
+      const safeOrderId = Number(orderId);
+      const safeItemId = Number(itemId);
+      if (!Number.isFinite(safeOrderId) || safeOrderId <= 0) {
+        throw new Error("orderId inválido para eliminar producto.");
+      }
+      if (!Number.isFinite(safeItemId) || safeItemId <= 0) {
+        throw new Error("itemId inválido para eliminar producto.");
+      }
+
+      const url = `${baseUrl}/control-orders/order/${encodeURIComponent(String(safeOrderId))}/item/${encodeURIComponent(
+        String(safeItemId)
+      )}`;
+      const { response, data } = await fetchJson(url, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudo eliminar producto del pedido.").trim();
+        throw new Error(msg || "No se pudo eliminar producto del pedido.");
+      }
+      return { data: data?.data || null };
+    },
+
+    addControlOrderItem: async ({ orderId, productName, quantityText, unit } = {}) => {
+      const safeOrderId = Number(orderId);
+      if (!Number.isFinite(safeOrderId) || safeOrderId <= 0) {
+        throw new Error("orderId inválido para agregar producto.");
+      }
+      const safeProductName = String(productName || "").trim();
+      if (!safeProductName) {
+        throw new Error("Debe indicar un nombre de producto.");
+      }
+
+      const url = `${baseUrl}/control-orders/order/${encodeURIComponent(String(safeOrderId))}/items`;
+      const { response, data } = await fetchJson(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productName: safeProductName, quantityText, unit }),
+      });
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudo agregar producto al pedido.").trim();
+        throw new Error(msg || "No se pudo agregar producto al pedido.");
+      }
+      return { data: data?.data || null };
     },
 
     updateTodayControlOrder: async ({ clientId, approved, flete } = {}) => {
@@ -123,6 +225,19 @@ export const createOrdersApi = (options = {}) => {
       if (!response.ok) {
         const msg = String(data?.error || "No se pudo actualizar el control del pedido.").trim();
         throw new Error(msg || "No se pudo actualizar el control del pedido.");
+      }
+      return { data: data?.data || null };
+    },
+
+    setOnlyCurrentControlOrders: async () => {
+      const url = `${baseUrl}/control-orders/only-current`;
+      const { response, data } = await fetchJson(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudo aplicar Solo Actuales en Todos.").trim();
+        throw new Error(msg || "No se pudo aplicar Solo Actuales en Todos.");
       }
       return { data: data?.data || null };
     },
@@ -253,6 +368,30 @@ export const createOrdersApi = (options = {}) => {
       if (!response.ok) {
         const msg = String(data?.error || "No se pudo quitar responsable del cliente.").trim();
         throw new Error(msg || "No se pudo quitar responsable del cliente.");
+      }
+      return { data: data?.data || null };
+    },
+
+    listRepartoProductResponsibles: async () => {
+      const url = `${baseUrl}/reparto/product-responsibles`;
+      const { response, data } = await fetchJson(url);
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudo leer relación de responsables por producto.").trim();
+        throw new Error(msg || "No se pudo leer relación de responsables por producto.");
+      }
+      return { data: Array.isArray(data?.data) ? data.data : [] };
+    },
+
+    updateRepartoProductResponsible: async ({ productName, responsibleName } = {}) => {
+      const url = `${baseUrl}/reparto/product-responsible`;
+      const { response, data } = await fetchJson(url, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productName, responsibleName }),
+      });
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudo actualizar responsable del producto.").trim();
+        throw new Error(msg || "No se pudo actualizar responsable del producto.");
       }
       return { data: data?.data || null };
     },
