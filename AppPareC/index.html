@@ -282,8 +282,22 @@
             </button>
             <p id="update-imprimir-pedidos-status" class="save-status" aria-live="polite"></p>
           </div>
+          <div class="client-select__top-action-item">
+            <button id="control-comments-report" type="button" class="button-secondary">
+              Reporte/Borrar Comentarios
+            </button>
+            <p id="control-comments-report-status" class="save-status" aria-live="polite"></p>
+          </div>
+          <div class="client-select__top-action-item">
+            <button id="control-units-report" type="button" class="button-secondary">
+              Reporte Unidades
+            </button>
+            <p id="control-units-report-status" class="save-status" aria-live="polite"></p>
+          </div>
         </div>
         <p id="control-orders-status" class="save-status" aria-live="polite"></p>
+
+        <div id="control-units-report-wrap" class="control-report hidden" aria-live="polite"></div>
 
         <div class="control-orders__table-wrap">
           <table class="control-orders__table">
@@ -304,6 +318,8 @@
             </tbody>
           </table>
         </div>
+
+        <div id="control-comments-report-wrap" class="control-report hidden" aria-live="polite"></div>
       </section>
 
       <section id="reparto-pane" class="card tab-pane hidden" aria-labelledby="reparto-title">

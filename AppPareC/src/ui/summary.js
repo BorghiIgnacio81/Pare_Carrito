@@ -10,6 +10,7 @@ export const createSummaryController = ({
   productState,
   updateOutput,
   scheduleCoverageUpdate,
+  getUnitsForProductId,
 }) => {
   let lastRequestedCount = null;
   let warningKeys = new Set();
@@ -67,6 +68,102 @@ export const createSummaryController = ({
     warningKeys = new Set();
   };
 
+  const parseQuantityInput = (value) => {
+    const text = String(value || "").trim().replace(",", ".");
+    if (!text) {
+      return 0;
+    }
+    const fraction = text.match(/^(\d+)\s*\/\s*(\d+)$/);
+    if (fraction) {
+      const numerator = Number(fraction[1]);
+      const denominator = Number(fraction[2]);
+      if (Number.isFinite(numerator) && Number.isFinite(denominator) && denominator > 0) {
+        return numerator / denominator;
+      }
+    }
+    const parsed = Number(text);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const normalizeKeyText = (value) => String(value ?? "").trim().toLowerCase();
+
+  const resolveProductStateEntry = (state, item) => {
+    if (!state || typeof state.get !== "function" || !item) {
+      return null;
+    }
+
+    if (state.has(item.productId)) {
+      return { key: item.productId, value: state.get(item.productId) };
+    }
+
+    const productIdText = String(item.productId ?? "").trim();
+    if (productIdText) {
+      if (state.has(productIdText)) {
+        return { key: productIdText, value: state.get(productIdText) };
+      }
+      for (const [key, value] of state.entries()) {
+        if (String(key ?? "").trim() === productIdText) {
+          return { key, value };
+        }
+      }
+    }
+
+    const targetName = normalizeKeyText(item.productName);
+    if (targetName) {
+      for (const [key, value] of state.entries()) {
+        if (normalizeKeyText(value?.productName) === targetName) {
+          return { key, value };
+        }
+      }
+    }
+
+    return null;
+  };
+
+  const createPencilIconNode = () => {
+    const svgNS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("aria-hidden", "true");
+    svg.classList.add("icon-pencil");
+
+    const shaft = document.createElementNS(svgNS, "path");
+    shaft.setAttribute("d", "M6 7 L9 4 L19 14 L16 17 Z");
+    shaft.setAttribute("fill", "none");
+    shaft.setAttribute("stroke", "currentColor");
+    shaft.setAttribute("stroke-width", "1.8");
+    shaft.setAttribute("stroke-linejoin", "round");
+
+    const tip = document.createElementNS(svgNS, "path");
+    tip.setAttribute("d", "M16 17 L19 14 L21 19 Z");
+    tip.setAttribute("fill", "none");
+    tip.setAttribute("stroke", "currentColor");
+    tip.setAttribute("stroke-width", "1.8");
+    tip.setAttribute("stroke-linejoin", "round");
+
+    const eraser = document.createElementNS(svgNS, "path");
+    eraser.setAttribute("d", "M4.6 8.3 L7.4 5.5");
+    eraser.setAttribute("fill", "none");
+    eraser.setAttribute("stroke", "currentColor");
+    eraser.setAttribute("stroke-width", "1.8");
+    eraser.setAttribute("stroke-linecap", "round");
+
+    const center = document.createElementNS(svgNS, "path");
+    center.setAttribute("d", "M10 6 L17 13");
+    center.setAttribute("fill", "none");
+    center.setAttribute("stroke", "currentColor");
+    center.setAttribute("stroke-width", "1.6");
+    center.setAttribute("stroke-linecap", "round");
+
+    svg.appendChild(shaft);
+    svg.appendChild(tip);
+    svg.appendChild(eraser);
+    svg.appendChild(center);
+    return svg;
+  };
+
   const renderSummary = () => {
     if (summaryBox) {
       summaryBox.classList.toggle("is-hidden", !clientSelect.value);
@@ -119,6 +216,14 @@ export const createSummaryController = ({
 
     items.forEach((item) => {
       const li = document.createElement("li");
+      li.className = "summary-list__item";
+
+      const row = document.createElement("div");
+      row.className = "summary-list__row";
+
+      const text = document.createElement("span");
+      text.className = "summary-list__text";
+
       const warningKey = `${item.productId}__${item.unit || ""}__${item.variant || ""}`;
       const isWarn = warningKeys && warningKeys.has(warningKey);
       const repeatCount = Number(item.importCount || 0);
@@ -136,9 +241,118 @@ export const createSummaryController = ({
           ? "Kg"
           : ` ${item.unit}`
         : " (sin unidad)";
-      li.textContent = `${isWarn ? "⚠️ " : ""}${item.productName}${variantText}${repeatText} - ${quantityText}${unitText}`;
+      text.textContent = `${isWarn ? "⚠️ " : ""}${item.productName}${variantText}${repeatText} - ${quantityText}${unitText}`;
+
+      const editButton = document.createElement("button");
+      editButton.type = "button";
+      editButton.className = "control-orders__item-action control-orders__item-action--edit summary-list__edit";
+      editButton.title = "Editar producto";
+      editButton.setAttribute("aria-label", "Editar producto");
+      editButton.appendChild(createPencilIconNode());
+
+      row.appendChild(text);
+      row.appendChild(editButton);
+      li.appendChild(row);
+
+      const form = document.createElement("form");
+      form.className = "control-orders__item-inline-form summary-list__edit-form hidden";
+
+      const qtyInput = document.createElement("input");
+      qtyInput.type = "text";
+      qtyInput.className = "control-orders__item-inline-input summary-list__qty-input";
+      qtyInput.placeholder = "Cantidad";
+      qtyInput.maxLength = 4;
+      qtyInput.value = item.unitMode
+        ? String(item.quantityText || "").trim()
+        : formatQuantityForUi(item.quantity || 0);
+
+      const unitSelect = document.createElement("select");
+      unitSelect.className = "control-orders__item-inline-input";
+      const resolvedUnits =
+        typeof getUnitsForProductId === "function"
+          ? getUnitsForProductId(item.productId, item.unit)
+          : [String(item.unit || "").trim() || "Unidad"];
+      const units = Array.from(new Set((Array.isArray(resolvedUnits) ? resolvedUnits : []).filter(Boolean)));
+      const finalUnits = units.length
+        ? units
+        : [String(item.unit || "").trim() || "Unidad"];
+      const showUnitSelect = !item.unitMode && finalUnits.length > 1;
+      finalUnits.forEach((unitName) => {
+        const option = document.createElement("option");
+        option.value = unitName;
+        option.textContent = unitName;
+        if (String(item.unit || "").trim() === unitName) {
+          option.selected = true;
+        }
+        unitSelect.appendChild(option);
+      });
+      unitSelect.disabled = Boolean(item.unitMode);
+
+      const saveButton = document.createElement("button");
+      saveButton.type = "submit";
+      saveButton.className = "button-secondary control-orders__item-inline-btn";
+      saveButton.textContent = "Guardar";
+
+      const cancelButton = document.createElement("button");
+      cancelButton.type = "button";
+      cancelButton.className = "button-secondary control-orders__item-inline-btn";
+      cancelButton.textContent = "Cancelar";
+
+      const inlineStatus = document.createElement("span");
+      inlineStatus.className = "save-status control-orders__item-inline-status";
+
+      form.appendChild(qtyInput);
+      if (showUnitSelect) {
+        form.appendChild(unitSelect);
+      }
+      form.appendChild(saveButton);
+      form.appendChild(cancelButton);
+      form.appendChild(inlineStatus);
+      li.appendChild(form);
+
+      editButton.addEventListener("click", () => {
+        form.classList.toggle("hidden");
+        if (!form.classList.contains("hidden")) {
+          qtyInput.focus();
+        }
+      });
+
+      cancelButton.addEventListener("click", () => {
+        form.classList.add("hidden");
+        inlineStatus.textContent = "";
+        inlineStatus.classList.remove("save-status--success", "save-status--error");
+      });
+
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const entry = resolveProductStateEntry(productState, item);
+        if (!entry?.value) {
+          inlineStatus.textContent = "Producto no disponible.";
+          inlineStatus.classList.add("save-status--error");
+          return;
+        }
+
+        const next = { ...entry.value };
+        if (next.unitMode) {
+          next.quantityText = String(qtyInput.value || "").trim();
+          next.quantity = parseQuantityInput(next.quantityText);
+        } else {
+          const parsedQty = parseQuantityInput(qtyInput.value);
+          next.quantity = parsedQty > 0 ? parsedQty : 0;
+          next.unit = showUnitSelect
+            ? String(unitSelect.value || next.unit || "").trim()
+            : String(next.unit || "").trim();
+        }
+
+        productState.set(entry.key, next);
+        inlineStatus.textContent = "Guardado";
+        inlineStatus.classList.remove("save-status--error");
+        inlineStatus.classList.add("save-status--success");
+        renderSummary();
+      });
+
       if (isWarn) {
-        li.classList.add("summary-warning");
+        text.classList.add("summary-warning");
       }
       list.appendChild(li);
 

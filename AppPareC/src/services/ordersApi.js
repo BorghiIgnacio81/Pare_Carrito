@@ -242,6 +242,44 @@ export const createOrdersApi = (options = {}) => {
       return { data: data?.data || null };
     },
 
+    generateCommentsCleanupReport: async ({ date } = {}) => {
+      const safeDate = String(date || "").trim();
+      const url = `${baseUrl}/control-orders/reports/comments-cleanup`;
+      const payload = /^\d{4}-\d{2}-\d{2}$/.test(safeDate) ? { date: safeDate } : {};
+      const { response, data } = await fetchJson(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudo generar/borrar comentarios.").trim();
+        throw new Error(msg || "No se pudo generar/borrar comentarios.");
+      }
+      return {
+        dateKey: String(data?.dateKey || safeDate).trim(),
+        count: Number(data?.count) || 0,
+        data: Array.isArray(data?.data) ? data.data : [],
+      };
+    },
+
+    listUnitsReport: async ({ date } = {}) => {
+      const safeDate = String(date || "").trim();
+      const query = /^\d{4}-\d{2}-\d{2}$/.test(safeDate)
+        ? `?date=${encodeURIComponent(safeDate)}`
+        : "";
+      const url = `${baseUrl}/control-orders/reports/units${query}`;
+      const { response, data } = await fetchJson(url);
+      if (!response.ok) {
+        const msg = String(data?.error || "No se pudo generar reporte de unidades.").trim();
+        throw new Error(msg || "No se pudo generar reporte de unidades.");
+      }
+      return {
+        dateKey: String(data?.dateKey || safeDate).trim(),
+        count: Number(data?.count) || 0,
+        data: Array.isArray(data?.data) ? data.data : [],
+      };
+    },
+
     listDbClients: async ({ includeInactive = false } = {}) => {
       const q = includeInactive ? "?includeInactive=1" : "";
       const url = `${baseUrl}/db/clients${q}`;

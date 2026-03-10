@@ -762,6 +762,36 @@ const getOrdersForDate = async ({ date = new Date() } = {}) => {
   return Array.from(byOrderId.values());
 };
 
+const listOrderDates = async ({ limit = 60 } = {}) => {
+  const p = getPool();
+  if (!p) {
+    return [];
+  }
+
+  await ensureSchema();
+
+  const safeLimit = Math.max(1, Math.min(365, Number(limit) || 60));
+  const result = await p.query(
+    `
+      SELECT DISTINCT COALESCE(o.order_date::date, o.created_at::date) AS order_day
+      FROM orders o
+      WHERE o.source = 'sheet'
+        AND COALESCE(o.order_date::date, o.created_at::date) IS NOT NULL
+      ORDER BY order_day DESC
+      LIMIT $1;
+    `,
+    [safeLimit]
+  );
+
+  return (Array.isArray(result?.rows) ? result.rows : [])
+    .map((row) => {
+      const raw = row?.order_day;
+      const date = raw instanceof Date ? raw : raw ? new Date(raw) : null;
+      return toIsoDate(date);
+    })
+    .filter(Boolean);
+};
+
 const saveOrderRow = async ({ sheetName, updatedRange, row, headers = [] }) => {
   const p = getPool();
   if (!p) {
@@ -852,4 +882,5 @@ export {
   getModels,
   migrateRawOrdersToNormalized,
   getOrdersForDate,
+  listOrderDates,
 };

@@ -155,6 +155,12 @@ export const createControlOrdersTab = ({
   refreshButton,
   tableBody,
   statusNode,
+  commentsReportButton,
+  commentsReportStatus,
+  unitsReportButton,
+  unitsReportStatus,
+  commentsReportWrap,
+  unitsReportWrap,
   responsibleSelect,
   repartoProductsBody,
   repartoProductsStatus,
@@ -171,6 +177,8 @@ export const createControlOrdersTab = ({
     availableDateKeys: [],
     divCompProductMap: new Map(),
     divCompProductEntries: [],
+    commentsReportRows: [],
+    unitsReportRows: [],
   };
 
   const toIsoDateKey = (value) => {
@@ -331,6 +339,227 @@ export const createControlOrdersTab = ({
     }
     if (variant === "error") {
       repartoProductsStatus.classList.add("save-status--error");
+    }
+  };
+
+  const setCommentsReportStatus = (message, variant = "") => {
+    if (!commentsReportStatus) {
+      return;
+    }
+    commentsReportStatus.textContent = String(message || "");
+    commentsReportStatus.classList.remove("save-status--success", "save-status--error");
+    if (variant === "success") {
+      commentsReportStatus.classList.add("save-status--success");
+    }
+    if (variant === "error") {
+      commentsReportStatus.classList.add("save-status--error");
+    }
+  };
+
+  const setUnitsReportStatus = (message, variant = "") => {
+    if (!unitsReportStatus) {
+      return;
+    }
+    unitsReportStatus.textContent = String(message || "");
+    unitsReportStatus.classList.remove("save-status--success", "save-status--error");
+    if (variant === "success") {
+      unitsReportStatus.classList.add("save-status--success");
+    }
+    if (variant === "error") {
+      unitsReportStatus.classList.add("save-status--error");
+    }
+  };
+
+  const renderCommentsReport = () => {
+    if (!commentsReportWrap) {
+      return;
+    }
+    const rows = Array.isArray(state.commentsReportRows) ? state.commentsReportRows : [];
+    commentsReportWrap.innerHTML = "";
+    if (!rows.length) {
+      commentsReportWrap.classList.add("hidden");
+      return;
+    }
+
+    const title = document.createElement("h3");
+    title.className = "control-report__title";
+    title.textContent = `Reporte de comentarios (${rows.length})`;
+
+    const table = document.createElement("table");
+    table.className = "control-report__table";
+    table.innerHTML =
+      "<thead><tr><th>Cliente</th><th>Producto</th><th>Comentario eliminado</th></tr></thead>";
+    const tbody = document.createElement("tbody");
+
+    rows.forEach((row) => {
+      const tr = document.createElement("tr");
+      const tdClient = document.createElement("td");
+      tdClient.textContent = `${String(row?.clientId || "").trim()}) ${String(row?.clientName || "").trim()}`.trim();
+      const tdProduct = document.createElement("td");
+      tdProduct.textContent = String(row?.productName || "").trim();
+      const tdComment = document.createElement("td");
+      tdComment.textContent = String(row?.commentRemoved || "").trim();
+      tr.appendChild(tdClient);
+      tr.appendChild(tdProduct);
+      tr.appendChild(tdComment);
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+    commentsReportWrap.appendChild(title);
+    commentsReportWrap.appendChild(table);
+    commentsReportWrap.classList.remove("hidden");
+  };
+
+  const renderUnitsReport = () => {
+    if (!unitsReportWrap) {
+      return;
+    }
+    const rows = Array.isArray(state.unitsReportRows) ? state.unitsReportRows : [];
+    unitsReportWrap.innerHTML = "";
+    if (!rows.length) {
+      unitsReportWrap.classList.add("hidden");
+      return;
+    }
+
+    const title = document.createElement("h3");
+    title.className = "control-report__title";
+    title.textContent = `Reporte unidades (con \"uni\") (${rows.length})`;
+
+    const table = document.createElement("table");
+    table.className = "control-report__table";
+    table.innerHTML =
+      "<thead><tr><th>Cliente</th><th>Producto</th><th>Actual</th><th>Nuevo Kg</th><th>Acción</th><th>Estado</th></tr></thead>";
+    const tbody = document.createElement("tbody");
+
+    rows.forEach((row) => {
+      const tr = document.createElement("tr");
+      const tdClient = document.createElement("td");
+      tdClient.textContent = `${String(row?.clientId || "").trim()}) ${String(row?.clientName || "").trim()}`.trim();
+
+      const tdProduct = document.createElement("td");
+      const variant = String(row?.variant || "").trim();
+      tdProduct.textContent = variant && variant !== "Común"
+        ? `${String(row?.productName || "").trim()} - ${variant}`
+        : String(row?.productName || "").trim();
+
+      const tdCurrent = document.createElement("td");
+      tdCurrent.textContent = String(row?.quantityText || "").trim();
+
+      const tdInput = document.createElement("td");
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "control-orders__item-inline-input";
+      input.placeholder = "Ej: 0,9";
+      tdInput.appendChild(input);
+
+      const tdAction = document.createElement("td");
+      const saveButton = document.createElement("button");
+      saveButton.type = "button";
+      saveButton.className = "button-secondary control-orders__item-inline-btn";
+      saveButton.textContent = "Guardar";
+      tdAction.appendChild(saveButton);
+
+      const tdState = document.createElement("td");
+      tdState.className = "save-status";
+
+      saveButton.addEventListener("click", async () => {
+        const value = String(input.value || "").trim();
+        const normalized = value.replace(",", ".");
+        const parsed = Number(normalized);
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+          tdState.textContent = "Kg inválido";
+          tdState.classList.add("save-status--error");
+          tdState.classList.remove("save-status--success");
+          return;
+        }
+
+        const itemId = Number(row?.itemId);
+        const orderId = Number(row?.orderId);
+        if (!Number.isFinite(itemId) || itemId <= 0 || !Number.isFinite(orderId) || orderId <= 0) {
+          tdState.textContent = "Ítem inválido";
+          tdState.classList.add("save-status--error");
+          tdState.classList.remove("save-status--success");
+          return;
+        }
+
+        saveButton.disabled = true;
+        tdState.textContent = "Guardando...";
+        tdState.classList.remove("save-status--error", "save-status--success");
+        try {
+          await ordersApi.updateControlOrderItem({
+            orderId,
+            itemId,
+            quantityText: String(value).replace(".", ","),
+            unit: String(row?.unit || "Kg").trim() || "Kg",
+          });
+          tdState.textContent = "Guardado";
+          tdState.classList.add("save-status--success");
+          tdCurrent.textContent = String(value).replace(".", ",");
+          row.quantityText = String(value).replace(".", ",");
+          setStatus("Reporte unidades actualizado en DB y Sheet.", "success");
+          await refresh();
+        } catch (error) {
+          tdState.textContent = String(error?.message || "No se pudo guardar");
+          tdState.classList.add("save-status--error");
+        } finally {
+          saveButton.disabled = false;
+        }
+      });
+
+      tr.appendChild(tdClient);
+      tr.appendChild(tdProduct);
+      tr.appendChild(tdCurrent);
+      tr.appendChild(tdInput);
+      tr.appendChild(tdAction);
+      tr.appendChild(tdState);
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+    unitsReportWrap.appendChild(title);
+    unitsReportWrap.appendChild(table);
+    unitsReportWrap.classList.remove("hidden");
+  };
+
+  const runCommentsCleanupReport = async () => {
+    if (!ordersApi || typeof ordersApi.generateCommentsCleanupReport !== "function") {
+      setCommentsReportStatus("API no disponible.", "error");
+      return;
+    }
+    const dateKey = String(state.selectedDateKey || getTodayDateKey()).trim();
+    commentsReportButton && (commentsReportButton.disabled = true);
+    setCommentsReportStatus("Generando reporte y borrando comentarios...");
+    try {
+      const result = await ordersApi.generateCommentsCleanupReport({ date: dateKey });
+      state.commentsReportRows = Array.isArray(result?.data) ? result.data : [];
+      renderCommentsReport();
+      await refresh();
+      setCommentsReportStatus(`Reporte generado: ${state.commentsReportRows.length} comentarios removidos.`, "success");
+    } catch (error) {
+      setCommentsReportStatus(String(error?.message || "No se pudo generar reporte."), "error");
+    } finally {
+      commentsReportButton && (commentsReportButton.disabled = false);
+    }
+  };
+
+  const runUnitsReport = async () => {
+    if (!ordersApi || typeof ordersApi.listUnitsReport !== "function") {
+      setUnitsReportStatus("API no disponible.", "error");
+      return;
+    }
+    const dateKey = String(state.selectedDateKey || getTodayDateKey()).trim();
+    unitsReportButton && (unitsReportButton.disabled = true);
+    setUnitsReportStatus("Generando reporte unidades...");
+    try {
+      const result = await ordersApi.listUnitsReport({ date: dateKey });
+      state.unitsReportRows = Array.isArray(result?.data) ? result.data : [];
+      renderUnitsReport();
+      setUnitsReportStatus(`Reporte unidades: ${state.unitsReportRows.length} filas.`, "success");
+    } catch (error) {
+      setUnitsReportStatus(String(error?.message || "No se pudo generar reporte."), "error");
+    } finally {
+      unitsReportButton && (unitsReportButton.disabled = false);
     }
   };
 
@@ -1063,8 +1292,17 @@ export const createControlOrdersTab = ({
 
       const tdStatus = document.createElement("td");
       tdStatus.className = "save-status control-orders__col-status";
-      tdStatus.textContent = row?.mapped ? "" : "Sin columna mapeada";
       if (!row?.mapped) {
+        tdStatus.textContent = "Sin columna mapeada";
+      } else if (row?.hasTextWarnings) {
+        const warningsCount = Number(row?.textWarningsCount) || 0;
+        tdStatus.textContent = warningsCount > 0 ? `⚠ Tiene texto (${warningsCount})` : "⚠ Tiene texto";
+      } else {
+        tdStatus.textContent = "";
+      }
+      if (!row?.mapped) {
+        tdStatus.classList.add("save-status--error");
+      } else if (row?.hasTextWarnings) {
         tdStatus.classList.add("save-status--error");
       }
 
@@ -1546,9 +1784,16 @@ export const createControlOrdersTab = ({
         state.selectedDateKey = responseDateKey;
       }
 
+      if (String(state.selectedDateKey || "") !== getTodayDateKey()) {
+        state.commentsReportRows = [];
+        state.unitsReportRows = [];
+      }
+
       state.rows = Array.isArray(result?.data) ? result.data : [];
       await loadDivCompProductMap();
       renderRows();
+      renderUnitsReport();
+      renderCommentsReport();
       updateSortHeaderVisuals();
       renderRepartoRows();
       renderDateOptions();
@@ -1557,6 +1802,8 @@ export const createControlOrdersTab = ({
       state.rows = [];
       state.divCompProductMap = new Map();
       renderRows();
+      renderUnitsReport();
+      renderCommentsReport();
       updateSortHeaderVisuals();
       renderRepartoRows();
       renderDateOptions();
@@ -1625,6 +1872,12 @@ export const createControlOrdersTab = ({
     tabControlButton?.addEventListener("click", () => setActiveTab("control"));
     tabRepartoButton?.addEventListener("click", () => setActiveTab("reparto"));
     refreshButton?.addEventListener("click", () => refresh());
+    commentsReportButton?.addEventListener("click", () => {
+      runCommentsCleanupReport();
+    });
+    unitsReportButton?.addEventListener("click", () => {
+      runUnitsReport();
+    });
     onlyCurrentButton?.addEventListener("click", () => {
       applyOnlyCurrent();
     });

@@ -1050,6 +1050,38 @@ const buildCellValueForSheetItem = ({ quantityText, notes }) => {
   return out.trim();
 };
 
+const isPureNumericText = (value) => /^-?\d+(?:[.,]\d+)?$/.test(String(value || "").trim());
+
+const hasTextWarningInItem = (item) => {
+  const notes = String(item?.notes || "").trim();
+  if (notes) {
+    return true;
+  }
+  const qtyText = String(item?.quantityText || "").trim();
+  if (!qtyText) {
+    return false;
+  }
+  return !isPureNumericText(qtyText);
+};
+
+const stripCommentFromQuantityText = ({ quantityText, quantity }) => {
+  const raw = String(quantityText || "").trim();
+  if (!raw) {
+    if (Number.isFinite(Number(quantity)) && Number(quantity) > 0) {
+      const n = Number(quantity);
+      return Number.isInteger(n) ? String(n) : String(Math.round(n * 1000) / 1000).replace(".", ",");
+    }
+    return "";
+  }
+  const withComment = raw.match(/^(.+?)\s*\.\s*.+$/);
+  return String(withComment?.[1] || raw).trim();
+};
+
+const parseIsoDateOrToday = (value) => {
+  const parsed = parseIsoDateInput(value);
+  return parsed || new Date();
+};
+
 const findSheetHeaderColumnByName = async ({ sheetName, productName, unit = "", variant = "" }) => {
   const normalizedProduct = normalizeKeyText(productName);
   const normalizedUnit = normalizeKeyText(unit);
@@ -1288,6 +1320,8 @@ const buildControlOrdersForDate = async ({ date }) => {
         notes: String(item?.notes || "").trim(),
         position: Number(item?.position) || 0,
       })),
+      hasTextWarnings: items.some((item) => hasTextWarningInItem(item)),
+      textWarningsCount: items.filter((item) => hasTextWarningInItem(item)).length,
       approved: Boolean(control?.approved),
       flete: String(control?.flete || "Flete 1"),
       dispatchRaw: String(control?.dispatchRaw || ""),
@@ -1320,6 +1354,219 @@ app.get("/api/headers", async (_req, res) => {
     res.json({ headers: values[0] || [] });
   } catch (error) {
     res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+app.post("/api/control-orders/reports/comments-cleanup", async (req, res) => {
+  try {
+    const getDbPool = app.locals.getDbPool;
+    if (typeof getDbPool !== "function") {
+      res.status(503).json({ ok: false, error: "DB no inicializada para reporte de comentarios." });
+      return;
+    }
+    const pool = getDbPool();
+    if (!pool) {
+      res.status(503).json({ ok: false, error: "DB no disponible para reporte de comentarios." });
+      return;
+    }
+
+    const targetDate = parseIsoDateOrToday(req?.body?.date);
+    const isoDate = toIsoDateText(targetDate);
+    if (!isoDate) {
+      res.status(400).json({ ok: false, error: "Fecha inválida." });
+      return;
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const result = await client.query(
+        `
+          SELECT
+            oi.id AS item_id,
+            oi.order_id,
+            oi.product_name_text,
+            oi.quantity,
+            oi.quantity_text,
+            oi.unit,
+            oi.variant,
+            oi.notes,
+            oi.source_column_index,
+            o.sheet_name,
+            o.sheet_row_number,
+            c.external_id AS client_external_id,
+            c.name AS client_name
+          FROM order_items oi
+          INNER JOIN orders o ON o.id = oi.order_id
+          LEFT JOIN clients c ON c.id = o.client_id
+          WHERE o.source = 'sheet'
+            AND COALESCE(o.order_date::date, o.created_at::date) = $1::date
+            AND COALESCE(TRIM(oi.notes), '') <> ''
+          ORDER BY c.external_id ASC NULLS LAST, c.name ASC NULLS LAST, oi.product_name_text ASC, oi.id ASC;
+        `,
+        [isoDate]
+      );
+
+      const rows = Array.isArray(result?.rows) ? result.rows : [];
+      const report = [];
+      const sheetUpdates = [];
+
+      rows.forEach((row) => {
+        const itemId = Number(row?.item_id);
+        const orderId = Number(row?.order_id);
+        const notesBefore = String(row?.notes || "").trim();
+        const quantityBefore = String(row?.quantity_text || "").trim();
+        const quantityClean = stripCommentFromQuantityText({
+          quantityText: quantityBefore,
+          quantity: row?.quantity,
+        });
+        const rawValue = buildCellValueForSheetItem({ quantityText: quantityClean, notes: "" });
+
+        if (Number.isFinite(itemId) && itemId > 0 && Number.isFinite(orderId) && orderId > 0) {
+          report.push({
+            itemId,
+            orderId,
+            clientId: String(row?.client_external_id || "").trim(),
+            clientName: String(row?.client_name || "").trim(),
+            productName: String(row?.product_name_text || "").trim(),
+            quantityBefore,
+            commentRemoved: notesBefore,
+            quantityAfter: quantityClean,
+          });
+        }
+
+        const sourceColumnIndex = Number(row?.source_column_index);
+        const sheetRowNumber = Number(row?.sheet_row_number);
+        const sheetName = String(row?.sheet_name || "").trim();
+        if (
+          Number.isFinite(sourceColumnIndex) &&
+          sourceColumnIndex >= 0 &&
+          Number.isFinite(sheetRowNumber) &&
+          sheetRowNumber > 0 &&
+          sheetName
+        ) {
+          const colA1 = toA1Column(sourceColumnIndex + 1);
+          const cellA1 = `${colA1}${sheetRowNumber}`;
+          const range = toQuotedSheetRange({ sheetName, startCell: cellA1, endCell: cellA1 });
+          sheetUpdates.push({ range, values: [[rawValue]] });
+        }
+      });
+
+      for (const row of rows) {
+        const itemId = Number(row?.item_id);
+        if (!Number.isFinite(itemId) || itemId <= 0) {
+          continue;
+        }
+        const quantityClean = stripCommentFromQuantityText({
+          quantityText: String(row?.quantity_text || "").trim(),
+          quantity: row?.quantity,
+        });
+        const rawValue = buildCellValueForSheetItem({ quantityText: quantityClean, notes: "" });
+
+        await client.query(
+          `
+            UPDATE order_items
+            SET quantity_text = $1,
+                notes = NULL,
+                raw_value_text = $2
+            WHERE id = $3;
+          `,
+          [quantityClean || null, rawValue || null, itemId]
+        );
+      }
+
+      if (sheetUpdates.length) {
+        const sheets = await getSheetsClient();
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: SPREADSHEET_ID,
+          requestBody: {
+            valueInputOption: "USER_ENTERED",
+            data: sheetUpdates,
+          },
+        });
+      }
+
+      await client.query("COMMIT");
+      res.json({
+        ok: true,
+        dateKey: isoDate,
+        data: report,
+        count: report.length,
+      });
+    } catch (error) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    res.status(500).json({ ok: false, error: String(error?.message || error) });
+  }
+});
+
+app.get("/api/control-orders/reports/units", async (req, res) => {
+  try {
+    const getDbPool = app.locals.getDbPool;
+    if (typeof getDbPool !== "function") {
+      res.status(503).json({ ok: false, error: "DB no inicializada para reporte de unidades." });
+      return;
+    }
+    const pool = getDbPool();
+    if (!pool) {
+      res.status(503).json({ ok: false, error: "DB no disponible para reporte de unidades." });
+      return;
+    }
+
+    const targetDate = parseIsoDateOrToday(req?.query?.date);
+    const isoDate = toIsoDateText(targetDate);
+    if (!isoDate) {
+      res.status(400).json({ ok: false, error: "Fecha inválida." });
+      return;
+    }
+
+    const result = await pool.query(
+      `
+        SELECT
+          oi.id AS item_id,
+          oi.order_id,
+          oi.product_name_text,
+          oi.quantity,
+          oi.quantity_text,
+          oi.unit,
+          oi.variant,
+          oi.notes,
+          c.external_id AS client_external_id,
+          c.name AS client_name
+        FROM order_items oi
+        INNER JOIN orders o ON o.id = oi.order_id
+        LEFT JOIN clients c ON c.id = o.client_id
+        WHERE o.source = 'sheet'
+          AND COALESCE(o.order_date::date, o.created_at::date) = $1::date
+          AND LOWER(COALESCE(oi.quantity_text, '')) LIKE '%uni%'
+        ORDER BY c.external_id ASC NULLS LAST, c.name ASC NULLS LAST, oi.product_name_text ASC, oi.id ASC;
+      `,
+      [isoDate]
+    );
+
+    const data = (Array.isArray(result?.rows) ? result.rows : []).map((row) => ({
+      itemId: Number(row?.item_id) || null,
+      orderId: Number(row?.order_id) || null,
+      clientId: String(row?.client_external_id || "").trim(),
+      clientName: String(row?.client_name || "").trim(),
+      productName: String(row?.product_name_text || "").trim(),
+      quantity: Number.isFinite(Number(row?.quantity)) ? Number(row.quantity) : null,
+      quantityText: String(row?.quantity_text || "").trim(),
+      unit: String(row?.unit || "").trim(),
+      variant: String(row?.variant || "").trim(),
+      notes: String(row?.notes || "").trim(),
+    }));
+
+    res.json({ ok: true, dateKey: isoDate, data, count: data.length });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: String(error?.message || error) });
   }
 });
 

@@ -60,6 +60,34 @@ export const createProductStateController = ({
       importOrder: null,
     };
     const next = { ...current, ...updates };
+    const normalizeQtyText = (value) => {
+      if (!Number.isFinite(value) || value <= 0) {
+        return "";
+      }
+      const rounded = Math.round(value * 1000) / 1000;
+      return Number.isInteger(rounded) ? String(rounded) : String(rounded).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+    };
+    if (next.unitMode) {
+      const rawText = String(next.quantityText || "").trim();
+      const normalizedRaw = rawText.replace(",", ".");
+      const rawAsNumber = Number(normalizedRaw);
+      const qtyFromState = Number(next.quantity);
+      const effectiveQty =
+        Number.isFinite(rawAsNumber) && rawAsNumber > 0
+          ? rawAsNumber
+          : Number.isFinite(qtyFromState) && qtyFromState > 0
+            ? qtyFromState
+            : 0;
+      if (effectiveQty > 0) {
+        const hasUniToken = /\buni\b/i.test(rawText);
+        const formatted = normalizeQtyText(effectiveQty);
+        next.quantity = effectiveQty;
+        next.quantityText = hasUniToken && rawText ? rawText : `${formatted} uni`;
+      } else {
+        next.quantity = 0;
+        next.quantityText = "";
+      }
+    }
     if (Object.prototype.hasOwnProperty.call(updates, "quantity")) {
       if (updates.quantity > 0 && !current.addedAt) {
         next.addedAt = nextAddedAt();

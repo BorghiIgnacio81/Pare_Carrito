@@ -76,6 +76,7 @@ export const createProductCardBuilder = ({
     comboWarning.textContent = "La combinación elegida no existe en la planilla (Sheet).";
 
     const isZapalloProduct = product?.id === "zapallo";
+    const isTomateProduct = product?.id === "tomate";
 
     const supportsVariantIcons = product && (product.id === "manzana" || product.id === "morron");
 
@@ -158,6 +159,31 @@ export const createProductCardBuilder = ({
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "");
 
+    const getTomateUnitOptions = () => {
+      const source = Array.isArray(product.units) ? product.units : [];
+      if (!isTomateProduct) {
+        return source;
+      }
+      const byKey = new Map();
+      source.forEach((unit) => {
+        const key = normalizeLabelKey(unit);
+        if (key && !byKey.has(key)) {
+          byKey.set(key, unit);
+        }
+      });
+      if (!byKey.has("kg")) {
+        byKey.set("kg", "Kg");
+      }
+      const ordered = [byKey.get("kg")].filter(Boolean);
+      source.forEach((unit) => {
+        const key = normalizeLabelKey(unit);
+        if (key !== "kg" && unit && !ordered.includes(unit)) {
+          ordered.push(unit);
+        }
+      });
+      return ordered;
+    };
+
     const getZapalloUnitOptions = () => {
       if (!isZapalloProduct) {
         return Array.isArray(product.units) ? product.units : [];
@@ -236,6 +262,18 @@ export const createProductCardBuilder = ({
       if (isZapalloProduct) {
         return getZapalloUnitOptions();
       }
+      if (isTomateProduct) {
+        const tomatoUnits = getTomateUnitOptions();
+        if (!product?.comboSet || !(product.comboSet instanceof Set)) {
+          return tomatoUnits;
+        }
+        if (!String(variantLabel || "").trim()) {
+          return tomatoUnits;
+        }
+        const variantKey = normalizeVariantKey(variantLabel);
+        const units = tomatoUnits.filter((unit) => product.comboSet.has(`${unit}__${variantKey}`));
+        return units.length ? units : tomatoUnits;
+      }
       if (!product?.comboSet || !(product.comboSet instanceof Set)) {
         return product.units;
       }
@@ -310,10 +348,15 @@ export const createProductCardBuilder = ({
       const unitSelect = document.createElement("select");
       unitSelect.className = "unit-select";
       unitSelect.innerHTML = '<option value="" disabled>Seleccione una unidad</option>';
+      const favoriteUnitSet = new Set(
+        ((typeof getFavoritePresets === "function" ? getFavoritePresets(product.id, "") : []) || [])
+          .map((preset) => String(preset?.unit || "").trim())
+          .filter(Boolean)
+      );
       (allowedUnits || product.units).forEach((unit) => {
         const option = document.createElement("option");
         option.value = unit;
-        option.textContent = unit;
+        option.textContent = favoriteUnitSet.has(unit) ? `★ ${unit}` : unit;
         if (selected && selected === unit) {
           option.selected = true;
         }
@@ -389,11 +432,17 @@ export const createProductCardBuilder = ({
         const selectedVariants = Array.from(rowsContainer.querySelectorAll(".variant-select"))
           .map((select) => select.value)
           .filter(Boolean);
+        if (!selectedVariants.length) {
+          // En la primera fila no fijar variante automáticamente para no filtrar
+          // prematuramente las unidades disponibles (ej. Tomate Kg).
+          // La combinación se valida cuando el usuario completa unidad/variante.
+        } else {
         const assumedUnit = effectivePreset.unit || product.defaultUnit || product.units[0] || "";
         const allowedForUnit = getAllowedVariantLabelsForUnit(assumedUnit);
         const remaining = allowedForUnit.filter((variant) => !selectedVariants.includes(variant));
         if (remaining.length === 1) {
           effectivePreset.variant = remaining[0];
+        }
         }
       }
 
@@ -403,7 +452,11 @@ export const createProductCardBuilder = ({
         product.variants.length && effectivePreset.variant
           ? getAllowedUnitsForVariant(effectivePreset.variant)
           : null;
-      const unitOptions = isZapalloProduct ? getZapalloUnitOptions() : product.units;
+      const unitOptions = isZapalloProduct
+        ? getZapalloUnitOptions()
+        : isTomateProduct
+          ? getTomateUnitOptions()
+          : product.units;
       const initialUnitSelection =
         effectivePreset.unit || (isSingleUnit ? fixedUnit : "");
       const unitSelect = isSingleUnit
@@ -538,6 +591,27 @@ export const createProductCardBuilder = ({
         }
         const currentUnit = unitSelect ? unitSelect.value : fixedUnit;
         const currentVariant = variantSelect ? variantSelect.value : "";
+
+        if (source === "variant" && unitSelect && variantSelect) {
+          const preferredVariant = variantSelect.value || currentVariant;
+          const allowedUnitsByVariant = getAllowedUnitsForVariant(preferredVariant);
+          const desiredUnitByVariant = allowedUnitsByVariant.includes(unitSelect.value)
+            ? unitSelect.value
+            : allowedUnitsByVariant[0] || product.defaultUnit || "";
+          rebuildSelect(unitSelect, allowedUnitsByVariant, desiredUnitByVariant);
+
+          const allowedVariantsByUnit = getAllowedVariantLabelsForUnit(unitSelect.value || fixedUnit);
+          const desiredVariantByUnit = allowedVariantsByUnit.includes(preferredVariant)
+            ? preferredVariant
+            : allowedVariantsByUnit[0] || "";
+          rebuildSelect(variantSelect, allowedVariantsByUnit, desiredVariantByUnit);
+
+          updateHeaderIconFromPrimaryVariant();
+          updateRowIcon(row);
+          updateQuantityStep();
+          updateComboWarningVisibility();
+          return;
+        }
 
         if (variantSelect) {
           const allowedVariants = getAllowedVariantLabelsForUnit(currentUnit);

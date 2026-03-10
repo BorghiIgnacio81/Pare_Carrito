@@ -1,6 +1,6 @@
 param(
     [Parameter(Position=0)]
-    [ValidateSet('add','add-minutes','start','stop','status','report')]
+    [ValidateSet('add','add-minutes','start','stop','status','report','official')]
     [string]$Command,
 
     [string]$Date,
@@ -14,10 +14,11 @@ param(
     # Optional: adjust running session by inactivity in the workspace.
     [string]$WorkspaceRoot = (Get-Location).Path,
     [string]$VsCodeAppData = "$env:APPDATA\\Code",
-    [int]$InactivityGapMinutes = 0,
+    [int]$InactivityGapMinutes = 45,
 
     [double]$TargetHours = 52,
-    [string]$ConfigPath = (Join-Path (Join-Path (Get-Location).Path 'scripts') 'time-tracking.config.json'),
+    [string]$CheckpointDate = '2026-03-04',
+    [double]$CheckpointTotalMinutes = 2820,
 
     [string]$File = (Join-Path (Get-Location).Path 'worklog.csv')
 )
@@ -25,18 +26,104 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$metricsModulePath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'modules\worklogMetrics.ps1'
-if (Test-Path -LiteralPath $metricsModulePath) {
-    . $metricsModulePath
+function Convert-ToDoubleInvariant([object]$value) {
+    if ($null -eq $value) { return 0.0 }
+    $text = [string]$value
+    if (-not $text) { return 0.0 }
+    $normalized = $text.Trim().Replace(',', '.')
+    [double]$n = 0
+    if ([double]::TryParse($normalized, [System.Globalization.NumberStyles]::Any, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$n)) {
+        return $n
+    }
+    return 0.0
 }
 
-$trackingConfig = if (Get-Command Read-TimeTrackingConfig -ErrorAction SilentlyContinue) {
-    Read-TimeTrackingConfig -configPath $ConfigPath
-} else {
-    $null
+function Get-WorklogEntries([string]$filePath) {
+    if (-not $filePath -or -not (Test-Path -LiteralPath $filePath)) {
+        return @()
+    }
+    try {
+        return @(Import-Csv -LiteralPath $filePath)
+    } catch {
+        return @()
+    }
 }
-if ($trackingConfig -and $trackingConfig.targetHours -ne $null -and -not $PSBoundParameters.ContainsKey('TargetHours')) {
-    $TargetHours = [double]$trackingConfig.targetHours
+
+function Get-LoggedMinutes([string]$filePath) {
+    $rows = Get-WorklogEntries -filePath $filePath
+    if (-not $rows -or $rows.Count -eq 0) {
+        return 0.0
+    }
+    $sum = 0.0
+    foreach ($r in $rows) {
+        $sum += (Convert-ToDoubleInvariant $r.NetMinutes)
+    }
+    return [math]::Round($sum, 1)
+}
+
+function Get-LoggedMinutesSinceDate([string]$filePath, [datetime]$exclusiveDate) {
+    $rows = Get-WorklogEntries -filePath $filePath
+    if (-not $rows -or $rows.Count -eq 0) {
+        return 0.0
+    }
+    $sum = 0.0
+    foreach ($r in $rows) {
+        $dRaw = [string]$r.Date
+        if (-not $dRaw) { continue }
+        [datetime]$d = [datetime]::MinValue
+        if (-not [datetime]::TryParse($dRaw, [ref]$d)) { continue }
+        if ($d.Date -le $exclusiveDate.Date) { continue }
+        $sum += (Convert-ToDoubleInvariant $r.NetMinutes)
+    }
+    return [math]::Round($sum, 1)
+}
+
+function Get-CanonicalLoggedMinutes([string]$filePath, [string]$checkpointDate, [double]$checkpointTotalMinutes) {
+    $cpText = [string]$checkpointDate
+    if (-not $cpText -or [double]$checkpointTotalMinutes -le 0) {
+        return Get-LoggedMinutes -filePath $filePath
+    }
+
+    [datetime]$cpDate = [datetime]::MinValue
+    if (-not [datetime]::TryParse($cpText, [ref]$cpDate)) {
+        return Get-LoggedMinutes -filePath $filePath
+    }
+
+    $after = Get-LoggedMinutesSinceDate -filePath $filePath -exclusiveDate $cpDate
+    return [math]::Round([double]$checkpointTotalMinutes + $after, 1)
+}
+
+function Format-Minutes([double]$minutes) {
+    $rounded = [math]::Round($minutes, 1)
+    $hours = [math]::Floor($rounded / 60)
+    $mins = [math]::Round($rounded % 60)
+    return ('{0:00}:{1:00}' -f $hours, $mins)
+}
+
+function Get-LatestEntry([string]$filePath) {
+    $rows = Get-WorklogEntries -filePath $filePath
+    if (-not $rows -or $rows.Count -eq 0) {
+        return $null
+    }
+
+    $best = $null
+    $bestDate = [datetime]::MinValue
+    foreach ($r in $rows) {
+        $candidates = @([string]$r.End, [string]$r.Start, [string]$r.Date)
+        $current = [datetime]::MinValue
+        foreach ($raw in $candidates) {
+            if (-not $raw) { continue }
+            [datetime]$dt = [datetime]::MinValue
+            if ([datetime]::TryParse($raw, [ref]$dt)) {
+                if ($dt -gt $current) { $current = $dt }
+            }
+        }
+        if ($current -gt $bestDate) {
+            $bestDate = $current
+            $best = $r
+        }
+    }
+    return $best
 }
 
 function Parse-Date([string]$s) {
@@ -166,61 +253,65 @@ function Get-VsCodeHistoryLastWorkspaceEvent([string]$workspaceRoot, [datetime]$
     return $last
 }
 
-function Get-LastWorkspaceEventFromSessionsCsv([string]$workspaceRoot, [datetime]$since) {
-    if (-not $workspaceRoot) { return $null }
-    $csvPath = Join-Path $workspaceRoot 'work-hours-vscode-history-sessions.csv'
-    if (-not (Test-Path -LiteralPath $csvPath)) { return $null }
-    try {
-        $rows = Import-Csv -LiteralPath $csvPath
-    } catch {
-        return $null
-    }
-    if (-not $rows -or $rows.Count -eq 0) { return $null }
+function Get-WorkspaceSessionsFromHistory([string]$workspaceRoot, [datetime]$since, [int]$gapMinutes, [string]$vsCodeAppData) {
+    if (-not $workspaceRoot -or -not (Test-Path -LiteralPath $workspaceRoot)) { return @() }
+    if (-not $vsCodeAppData) { return @() }
+    $historyRoot = Join-Path $vsCodeAppData 'User\History'
+    if (-not (Test-Path -LiteralPath $historyRoot)) { return @() }
 
-    $last = $null
-    foreach ($r in $rows) {
-        $endRaw = [string]$r.End
-        if (-not $endRaw) { continue }
+    $ws = [System.IO.Path]::GetFullPath($workspaceRoot).TrimEnd('\\') + '\\'
+    $events = @()
+
+    $dirs = Get-ChildItem -LiteralPath $historyRoot -Directory -ErrorAction SilentlyContinue
+    foreach ($d in $dirs) {
+        $p = Join-Path $d.FullName 'entries.json'
+        if (-not (Test-Path -LiteralPath $p)) { continue }
         try {
-            $end = [datetime]::ParseExact($endRaw, 'yyyy-MM-dd HH:mm:ss', $null)
+            $raw = Get-Content -LiteralPath $p -Raw -ErrorAction Stop
+            if (-not $raw -or $raw.Trim() -eq '') { continue }
+            $obj = $raw | ConvertFrom-Json
         } catch {
             continue
         }
-        if ($end -lt $since) { continue }
-        if (-not $last -or $end -gt $last) { $last = $end }
-    }
-    return $last
-}
 
-function Ensure-WorkspaceSessionsCsv([string]$workspaceRoot, [int]$gapMinutes, [int]$daysBack) {
-    if (-not $workspaceRoot -or -not (Test-Path -LiteralPath $workspaceRoot)) { return $null }
-    $estimator = Join-Path $workspaceRoot 'scripts\estimate_work_hours_vscode_history.ps1'
-    if (-not (Test-Path -LiteralPath $estimator)) { return $null }
-    # Generate sessions CSV (same format used by hours_hybrid_report.ps1)
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $estimator -WorkspaceRoot $workspaceRoot -GapMinutes $gapMinutes -DaysBack $daysBack -AsCsv | Out-Null
-    $csvPath = Join-Path $workspaceRoot 'work-hours-vscode-history-sessions.csv'
-    if (Test-Path -LiteralPath $csvPath) { return $csvPath }
-    return $null
-}
+        $localPath = Get-LocalPathFromResource -resource $obj.resource
+        if (-not $localPath) { continue }
 
-function Read-WorkspaceSessions([string]$csvPath) {
-    if (-not $csvPath -or -not (Test-Path -LiteralPath $csvPath)) { return @() }
-    try {
-        $rows = Import-Csv -LiteralPath $csvPath
-    } catch {
-        return @()
-    }
-    if (-not $rows -or $rows.Count -eq 0) { return @() }
-    $sessions = @()
-    foreach ($r in $rows) {
         try {
-            $start = [datetime]::ParseExact([string]$r.Start, 'yyyy-MM-dd HH:mm:ss', $null)
-            $end = [datetime]::ParseExact([string]$r.End, 'yyyy-MM-dd HH:mm:ss', $null)
+            $lp = [System.IO.Path]::GetFullPath($localPath)
         } catch {
+            continue
+        }
+        if (-not $lp.StartsWith($ws, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+
+        if (-not $obj.entries) { continue }
+        foreach ($e in $obj.entries) {
+            if (-not $e.timestamp) { continue }
+            $when = [DateTimeOffset]::FromUnixTimeMilliseconds([int64]$e.timestamp).LocalDateTime
+            if ($when -lt $since) { continue }
+            $events += $when
+        }
+    }
+
+    if (-not $events -or $events.Count -eq 0) { return @() }
+
+    $events = @($events | Sort-Object)
+    $gap = [TimeSpan]::FromMinutes($gapMinutes)
+    $sessions = @()
+
+    $start = $events[0]
+    $end = $events[0]
+    for ($i = 1; $i -lt $events.Count; $i++) {
+        $t = $events[$i]
+        if (($t - $end) -le $gap) {
+            $end = $t
             continue
         }
         $sessions += [pscustomobject]@{ Start = $start; End = $end }
+        $start = $t
+        $end = $t
     }
+    $sessions += [pscustomobject]@{ Start = $start; End = $end }
     return ($sessions | Sort-Object Start)
 }
 
@@ -247,8 +338,8 @@ function Get-AdjustedMinutesFromInactivity([datetime]$sessionStart, [datetime]$n
     }
 
     $daysBack = [math]::Max(2, [int][math]::Ceiling((New-TimeSpan -Start $sessionStart -End $now).TotalDays) + 1)
-    $csvPath = Ensure-WorkspaceSessionsCsv -workspaceRoot $workspaceRoot -gapMinutes $gapMinutes -daysBack $daysBack
-    $sessions = Read-WorkspaceSessions -csvPath $csvPath
+    $since = (Get-Date).AddDays(-1 * $daysBack)
+    $sessions = Get-WorkspaceSessionsFromHistory -workspaceRoot $workspaceRoot -since $since -gapMinutes $gapMinutes -vsCodeAppData $VsCodeAppData
 
     $raw = [math]::Round((New-TimeSpan -Start $sessionStart -End $now).TotalMinutes, 1)
     if (-not $sessions -or $sessions.Count -eq 0) {
@@ -267,29 +358,17 @@ function Get-AdjustedMinutesFromInactivity([datetime]$sessionStart, [datetime]$n
 switch ($Command) {
     'status' {
         $r = Read-Running -path $runningPath
-        $loggedMinutes = if (Get-Command Get-CanonicalLoggedMinutes -ErrorAction SilentlyContinue) {
-            Get-CanonicalLoggedMinutes -filePath $File -config $trackingConfig
-        } else {
-            0.0
-        }
+        $loggedMinutes = Get-CanonicalLoggedMinutes -filePath $File -checkpointDate $CheckpointDate -checkpointTotalMinutes $CheckpointTotalMinutes
         $targetMinutes = [math]::Round($TargetHours * 60, 1)
 
         if (-not $r) {
             Write-Host 'No running session.'
-            $latest = if (Get-Command Get-LatestEntry -ErrorAction SilentlyContinue) {
-                Get-LatestEntry -filePath $File
-            } else {
-                $null
-            }
+            $latest = Get-LatestEntry -filePath $File
             if ($latest) {
                 Write-Host ("Last entry: Date={0} Start={1} End={2} NetMinutes={3} Note={4}" -f [string]$latest.Date, [string]$latest.Start, [string]$latest.End, [string]$latest.NetMinutes, [string]$latest.Note)
             }
-            if (Get-Command Format-Minutes -ErrorAction SilentlyContinue) {
-                Write-Host ("Total logged: {0} min ({1})" -f $loggedMinutes, (Format-Minutes -minutes $loggedMinutes))
-                Write-Host ("Target {0}h: {1} min. Remaining: {2} min" -f $TargetHours, $targetMinutes, [math]::Round($targetMinutes - $loggedMinutes, 1))
-            } else {
-                Write-Host ("Total logged: {0} min" -f $loggedMinutes)
-            }
+            Write-Host ("Total logged: {0} min ({1})" -f $loggedMinutes, (Format-Minutes -minutes $loggedMinutes))
+            Write-Host ("Target {0}h: {1} min. Remaining: {2} min" -f $TargetHours, $targetMinutes, [math]::Round($targetMinutes - $loggedMinutes, 1))
             return
         }
 
@@ -304,13 +383,9 @@ switch ($Command) {
         } else {
             Write-Host ("Running since {0} ({1} min so far). Note: {2}" -f $sessionStart, $calc.RawMinutes, [string]$r.Note)
         }
-        if (Get-Command Format-Minutes -ErrorAction SilentlyContinue) {
-            Write-Host ("Total logged (closed): {0} min ({1})" -f $loggedMinutes, (Format-Minutes -minutes $loggedMinutes))
-            Write-Host ("Total with current session: {0} min ({1})" -f $totalWithRunning, (Format-Minutes -minutes $totalWithRunning))
-            Write-Host ("Target {0}h: {1} min. Remaining: {2} min" -f $TargetHours, $targetMinutes, [math]::Round($targetMinutes - $totalWithRunning, 1))
-        } else {
-            Write-Host ("Total with current session: {0} min" -f $totalWithRunning)
-        }
+        Write-Host ("Total logged (closed): {0} min ({1})" -f $loggedMinutes, (Format-Minutes -minutes $loggedMinutes))
+        Write-Host ("Total with current session: {0} min ({1})" -f $totalWithRunning, (Format-Minutes -minutes $totalWithRunning))
+        Write-Host ("Target {0}h: {1} min. Remaining: {2} min" -f $TargetHours, $targetMinutes, [math]::Round($targetMinutes - $totalWithRunning, 1))
         return
     }
 
@@ -482,22 +557,55 @@ switch ($Command) {
                 }
             }
 
-        $total = if (Get-Command Get-CanonicalLoggedMinutes -ErrorAction SilentlyContinue) {
-            Get-CanonicalLoggedMinutes -filePath $File -config $trackingConfig
-        } else {
-            ($rows2 | Measure-Object NetMinutes -Sum).Sum
-        }
+        $total = Get-CanonicalLoggedMinutes -filePath $File -checkpointDate $CheckpointDate -checkpointTotalMinutes $CheckpointTotalMinutes
         Write-Host '--- Manual worklog report (worklog.csv only) ---'
         Write-Host ('Total: {0} minutes ({1} hours)' -f ([math]::Round($total,1)), ([math]::Round($total/60,2)))
-        if (Get-Command Format-Minutes -ErrorAction SilentlyContinue) {
-            Write-Host ('Total HH:mm: {0}' -f (Format-Minutes -minutes ([double]$total)))
-        }
+        Write-Host ('Total HH:mm: {0}' -f (Format-Minutes -minutes ([double]$total)))
         $targetMinutes = [math]::Round($TargetHours * 60, 1)
         Write-Host ('Target {0}h => Remaining: {1} minutes' -f $TargetHours, [math]::Round($targetMinutes - [double]$total, 1))
-        Write-Host 'Tip: for project total (VS Code + manual), run: .\scripts\hours_hybrid_report.ps1 -AsCsv'
+        Write-Host 'Tip: para total oficial unificado, usar: .\scripts\worklog.ps1 official'
         Write-Host ''
         Write-Host 'By day:'
         $byDay | Format-Table -AutoSize
+    }
+
+    'official' {
+        $loggedMinutes = Get-CanonicalLoggedMinutes -filePath $File -checkpointDate $CheckpointDate -checkpointTotalMinutes $CheckpointTotalMinutes
+        $targetMinutes = [math]::Round($TargetHours * 60, 1)
+        $runningMinutes = 0.0
+        $rawRunningMinutes = 0.0
+        $hasRunning = $false
+        $sessionStart = $null
+
+        $r = Read-Running -path $runningPath
+        if ($r) {
+            $hasRunning = $true
+            $sessionStart = [datetime]::ParseExact([string]$r.Start, 'yyyy-MM-dd HH:mm:ss', $null)
+            $now = Get-Date
+            $calc = Get-AdjustedMinutesFromInactivity -sessionStart $sessionStart -now $now -gapMinutes $InactivityGapMinutes -workspaceRoot $WorkspaceRoot
+            $rawRunningMinutes = [double]$calc.RawMinutes
+            $runningMinutes = if ($calc.Adjusted) { [double]$calc.AdjustedMinutes } else { [double]$calc.RawMinutes }
+        }
+
+        $totalWithRunning = [math]::Round($loggedMinutes + $runningMinutes, 1)
+
+        Write-Host '--- Total oficial unificado ---'
+        Write-Host ("Regla: checkpoint + worklog posterior. Checkpoint: {0} ({1} min / {2})" -f $CheckpointDate, [math]::Round($CheckpointTotalMinutes,1), (Format-Minutes -minutes $CheckpointTotalMinutes))
+
+        Write-Host ("Total oficial cerrado: {0} min ({1})" -f $loggedMinutes, (Format-Minutes -minutes $loggedMinutes))
+
+        if ($hasRunning) {
+            Write-Host ("Sesion activa desde {0}" -f $sessionStart.ToString('yyyy-MM-dd HH:mm:ss'))
+            Write-Host ("Sesion activa (ajustada): {0} min | bruto: {1} min | gap: {2} min" -f [math]::Round($runningMinutes,1), [math]::Round($rawRunningMinutes,1), $InactivityGapMinutes)
+            Write-Host ("Total oficial + sesion activa: {0} min ({1})" -f $totalWithRunning, (Format-Minutes -minutes $totalWithRunning))
+        } else {
+            Write-Host 'Sesion activa: no'
+        }
+
+        Write-Host ("Target {0}h: {1} min. Remaining (cerrado): {2} min" -f $TargetHours, $targetMinutes, [math]::Round($targetMinutes - $loggedMinutes, 1))
+
+        Write-Host ("Archivo oficial de datos: {0}" -f $File)
+        return
     }
 
     default {

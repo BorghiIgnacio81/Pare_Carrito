@@ -238,39 +238,43 @@ main {
 }
 
 .main-tabs-shell {
-  background: color-mix(in srgb, var(--accent) 16%, var(--card));
-  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
-  border-bottom: none;
-  border-radius: 10px 10px 0 0;
-  padding: 8px 10px 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
   margin-bottom: -24px;
 }
 
 .main-tabs {
   display: flex;
-  gap: 2px;
+  gap: 0;
   align-items: center;
   margin-top: 0;
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  position: relative;
 }
 
 .tab-button {
   min-width: 120px;
-  border-radius: 7px 7px 0 0;
-  margin-bottom: 0;
+  border-radius: 0;
+  margin: 0;
   border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
-  border-bottom: none;
-  background: color-mix(in srgb, var(--accent) 25%, #7f8ecf);
-  color: #f5f7ff;
-  font-weight: 600;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: color-mix(in srgb, var(--border) 28%, var(--card));
+  color: #2b2b2b;
+  font-weight: 500;
+  position: relative;
+  z-index: 1;
 }
 
 .tab-button--active {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
-  border-bottom: none;
+  border-bottom-color: var(--card);
   background: var(--card);
   color: #2e427e;
   font-weight: 700;
+  margin-bottom: -1px;
+  z-index: 2;
 }
 
 .tab-pane {
@@ -420,6 +424,32 @@ main {
 .control-orders__table-wrap {
   overflow-x: auto;
   padding-bottom: 260px;
+}
+
+.control-report {
+  margin: 10px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  padding: 10px;
+}
+
+.control-report__title {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.control-report__table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.control-report__table th,
+.control-report__table td {
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: middle;
 }
 
 .control-orders__table {
@@ -1045,7 +1075,20 @@ main {
 }
 
 .grid-table--narrow-product .grid-table__product {
-  max-width: 70px;
+  max-width: 80px;
+}
+
+.grid-table--narrow-product.grid-table--no-unit {
+  width: max-content;
+}
+
+.grid-table--narrow-product.grid-table--no-unit th:nth-child(1),
+.grid-table--narrow-product.grid-table--no-unit td:nth-child(1) {
+  width: 80px;
+}
+
+.grid-table--narrow-product.grid-table--no-unit .grid-table__product {
+  max-width: 80px;
 }
 
 .grid-table--narrow-product td:nth-child(3) select.grid-table__control {

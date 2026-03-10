@@ -68,20 +68,33 @@ export const createPdfReportsController = ({
     return `${product}${variantPart}${qtyPart}${notePart}`.trim();
   };
 
+  const rowsToPlainTextKeepingBlanks = (rows) =>
+    (rows || [])
+      .map((row) => (row || []).map((cell) => String(cell ?? "")).join("\t").trimEnd())
+      .join("\n");
+
   const buildRouteRowsFromDb = ({ orders, dispatchByClient }) => {
     const routes = {
       Trafic: { clients: new Map(), productTotals: new Map() },
       Kangoo: { clients: new Map(), productTotals: new Map() },
     };
 
-    const addProductTotal = (route, productName, quantity) => {
-      const safeName = String(productName || "").trim();
+    const addProductTotal = (route, item) => {
+      const productName = String(item?.productName || "").trim();
+      const variant = String(item?.variant || "").trim();
+      const safeName = variant && variant !== "Común" ? `${productName} - ${variant}` : productName;
       if (!safeName) {
         return;
       }
-      const current = Number(route.productTotals.get(safeName) || 0);
-      const next = Number.isFinite(quantity) && quantity > 0 ? current + quantity : current;
-      route.productTotals.set(safeName, next);
+      const qty = Number(item?.quantity);
+      const safeUnit = String(item?.unit || "").trim().toLowerCase();
+      const currentEntry = route.productTotals.get(safeName) || { total: 0, unit: "" };
+      const current = Number(currentEntry.total || 0);
+      const next = Number.isFinite(qty) && qty > 0 ? current + qty : current;
+      route.productTotals.set(safeName, {
+        total: next,
+        unit: currentEntry.unit || safeUnit,
+      });
     };
 
     (Array.isArray(orders) ? orders : []).forEach((order) => {
@@ -110,7 +123,7 @@ export const createPdfReportsController = ({
       }
       (Array.isArray(order?.items) ? order.items : []).forEach((item) => {
         itemList.lines.push(formatItemLine(item));
-        addProductTotal(route, item?.productName, Number(item?.quantity));
+        addProductTotal(route, item);
       });
     });
 
@@ -133,9 +146,14 @@ export const createPdfReportsController = ({
       });
 
       const sumaRows = Array.from(routeData.productTotals.entries())
-        .filter(([, total]) => Number(total) > 0)
+        .filter(([, entry]) => Number(entry?.total) > 0)
         .sort((a, b) => String(a[0] || "").localeCompare(String(b[0] || ""), "es"))
-        .map(([product, total]) => [product, String(Math.round(total * 1000) / 1000).replace(".", ",")]);
+        .map(([product, entry]) => {
+          const total = Number(entry?.total || 0);
+          const totalText = String(Math.round(total * 1000) / 1000).replace(".", ",");
+          const unit = String(entry?.unit || "").trim();
+          return [`${product} = ${totalText}${unit ? ` ${unit}` : ""}`];
+        });
 
       return { fleteRows, sumaRows };
     };
@@ -398,9 +416,9 @@ export const createPdfReportsController = ({
       const flete2Rows = printSourceRows.flete2Rows;
       const suma2Rows = printSourceRows.suma2Rows;
 
-      const flete1Text = rowsToPlainText(flete1Rows);
+      const flete1Text = rowsToPlainTextKeepingBlanks(flete1Rows);
       const suma1Text = rowsToPlainText(suma1Rows);
-      const flete2Text = rowsToPlainText(flete2Rows);
+      const flete2Text = rowsToPlainTextKeepingBlanks(flete2Rows);
       const suma2Text = rowsToPlainText(suma2Rows);
       const hasFlete2 = Boolean(printSourceRows.hasFlete2);
 
@@ -437,6 +455,37 @@ export const createPdfReportsController = ({
         await docs.documents.batchUpdate({
           documentId: PRINT_DOC_ID,
           requestBody: { requests },
+        });
+      };
+
+      const applyBlackTextBetween = async (fromMarker, toMarker) => {
+        if (!fromMarker || !toMarker) {
+          return;
+        }
+        const startIndex = Number(fromMarker.endIndex || 0);
+        const endIndex = Number(toMarker.startIndex || 0);
+        if (!(endIndex > startIndex)) {
+          return;
+        }
+        await docs.documents.batchUpdate({
+          documentId: PRINT_DOC_ID,
+          requestBody: {
+            requests: [
+              {
+                updateTextStyle: {
+                  range: { startIndex, endIndex },
+                  textStyle: {
+                    foregroundColor: {
+                      color: {
+                        rgbColor: { red: 0, green: 0, blue: 0 },
+                      },
+                    },
+                  },
+                  fields: "foregroundColor",
+                },
+              },
+            ],
+          },
         });
       };
 
@@ -478,6 +527,19 @@ export const createPdfReportsController = ({
       ]);
       if (updatedFlete2Marker) {
         await applySectionBetween(updatedSuma1, updatedFlete2Marker, suma1Text, false);
+
+        doc = await docs.documents.get({ documentId: PRINT_DOC_ID });
+        const suma1ForColor = findMarkerRange(doc, [
+          /(^|\n)\s*SUMA\s+FLETE\s*1\b/i,
+          /(^|\n)\s*SUMA\s+FLETE\s*I\b/i,
+          /SUMA\s+FLETE\s*1\b/i,
+        ]);
+        const flete2ForColor = findMarkerRange(doc, [
+          /(^|\n)\s*FLETE\s*2\b/i,
+          /(^|\n)\s*FLETE\s*II\b/i,
+          /FLETE\s*2\b/i,
+        ]);
+        await applyBlackTextBetween(suma1ForColor, flete2ForColor);
       } else {
         const docEndIndex = getDocumentEndIndex(doc);
         const requestsTail = [];
@@ -499,6 +561,15 @@ export const createPdfReportsController = ({
           documentId: PRINT_DOC_ID,
           requestBody: { requests: requestsTail },
         });
+
+        doc = await docs.documents.get({ documentId: PRINT_DOC_ID });
+        const suma1ForColor = findMarkerRange(doc, [
+          /(^|\n)\s*SUMA\s+FLETE\s*1\b/i,
+          /(^|\n)\s*SUMA\s+FLETE\s*I\b/i,
+          /SUMA\s+FLETE\s*1\b/i,
+        ]);
+        const endMarker = { startIndex: getDocumentEndIndex(doc), endIndex: getDocumentEndIndex(doc) };
+        await applyBlackTextBetween(suma1ForColor, endMarker);
       }
 
       doc = await docs.documents.get({ documentId: PRINT_DOC_ID });
@@ -509,32 +580,83 @@ export const createPdfReportsController = ({
           /(^|\n)\s*FLETE\s*II\b/i,
           /FLETE\s*2\b/i,
         ]);
-        const updatedEnd = getDocumentEndIndex(doc);
-        if (updatedFlete2 && updatedEnd > updatedFlete2.startIndex) {
-          await docs.documents.batchUpdate({
-            documentId: PRINT_DOC_ID,
-            requestBody: {
-              requests: [
-                {
-                  deleteContentRange: {
-                    range: { startIndex: updatedFlete2.startIndex, endIndex: updatedEnd },
-                  },
-                },
-              ],
-            },
-          });
-        }
-      } else {
-        const updatedFlete2 = findMarkerRange(doc, [
-          /(^|\n)\s*FLETE\s*2\b/i,
-          /(^|\n)\s*FLETE\s*II\b/i,
-          /FLETE\s*2\b/i,
-        ]);
         const updatedSuma2 = findMarkerRange(doc, [
           /(^|\n)\s*SUMA\s+FLETE\s*2\b/i,
           /(^|\n)\s*SUMA\s+FLETE\s*II\b/i,
           /SUMA\s+FLETE\s*2\b/i,
         ]);
+        if (updatedFlete2 && updatedSuma2) {
+          await applySectionBetween(updatedFlete2, updatedSuma2, "", true);
+
+          doc = await docs.documents.get({ documentId: PRINT_DOC_ID });
+          const latestSuma2 = findMarkerRange(doc, [
+            /(^|\n)\s*SUMA\s+FLETE\s*2\b/i,
+            /(^|\n)\s*SUMA\s+FLETE\s*II\b/i,
+            /SUMA\s+FLETE\s*2\b/i,
+          ]);
+          const endAfterSuma2 = getDocumentEndIndex(doc);
+          if (latestSuma2 && endAfterSuma2 > latestSuma2.endIndex) {
+            await docs.documents.batchUpdate({
+              documentId: PRINT_DOC_ID,
+              requestBody: {
+                requests: [
+                  {
+                    deleteContentRange: {
+                      range: { startIndex: latestSuma2.endIndex, endIndex: endAfterSuma2 },
+                    },
+                  },
+                  {
+                    insertText: {
+                      location: { index: latestSuma2.endIndex },
+                      text: "\n",
+                    },
+                  },
+                ],
+              },
+            });
+          }
+        }
+      } else {
+        let updatedFlete2 = findMarkerRange(doc, [
+          /(^|\n)\s*FLETE\s*2\b/i,
+          /(^|\n)\s*FLETE\s*II\b/i,
+          /FLETE\s*2\b/i,
+        ]);
+        let updatedSuma2 = findMarkerRange(doc, [
+          /(^|\n)\s*SUMA\s+FLETE\s*2\b/i,
+          /(^|\n)\s*SUMA\s+FLETE\s*II\b/i,
+          /SUMA\s+FLETE\s*2\b/i,
+        ]);
+
+        if (!updatedFlete2 || !updatedSuma2) {
+          const docEndIndex = getDocumentEndIndex(doc);
+          await docs.documents.batchUpdate({
+            documentId: PRINT_DOC_ID,
+            requestBody: {
+              requests: [
+                {
+                  insertText: {
+                    location: { index: docEndIndex },
+                    text: "\nFLETE 2\n\nSUMA FLETE 2\n",
+                  },
+                },
+              ],
+            },
+          });
+
+          doc = await docs.documents.get({ documentId: PRINT_DOC_ID });
+          updatedFlete2 = findMarkerRange(doc, [
+            /(^|\n)\s*FLETE\s*2\b/i,
+            /(^|\n)\s*FLETE\s*II\b/i,
+            /FLETE\s*2\b/i,
+          ]);
+          updatedSuma2 = findMarkerRange(doc, [
+            /(^|\n)\s*SUMA\s+FLETE\s*2\b/i,
+            /(^|\n)\s*SUMA\s+FLETE\s*II\b/i,
+            /SUMA\s+FLETE\s*2\b/i,
+          ]);
+        }
+
         if (!updatedFlete2 || !updatedSuma2) {
           throw new Error("No se encontraron marcadores de FLETE 2 en el Doc.");
         }
@@ -599,10 +721,99 @@ export const createPdfReportsController = ({
           documentId: PRINT_DOC_ID,
           requestBody: { requests: requests2 },
         });
+
+        doc = await docs.documents.get({ documentId: PRINT_DOC_ID });
+        const suma2ForColor = findMarkerRange(doc, [
+          /(^|\n)\s*SUMA\s+FLETE\s*2\b/i,
+          /(^|\n)\s*SUMA\s+FLETE\s*II\b/i,
+          /SUMA\s+FLETE\s*2\b/i,
+        ]);
+        const docEndMarker = { startIndex: getDocumentEndIndex(doc), endIndex: getDocumentEndIndex(doc) };
+        await applyBlackTextBetween(suma2ForColor, docEndMarker);
       }
 
       const drive = await getDriveClient();
       const refreshedDoc = await docs.documents.get({ documentId: PRINT_DOC_ID });
+
+      const bodyContent = Array.isArray(refreshedDoc?.data?.body?.content)
+        ? refreshedDoc.data.body.content
+        : [];
+      const bodyLast = bodyContent.length ? bodyContent[bodyContent.length - 1] : null;
+      const bodyEndIndexRaw = Number(bodyLast?.endIndex || 1);
+      if (bodyEndIndexRaw > 2) {
+        await docs.documents.batchUpdate({
+          documentId: PRINT_DOC_ID,
+          requestBody: {
+            requests: [
+              {
+                updateTextStyle: {
+                  range: { startIndex: 1, endIndex: bodyEndIndexRaw - 1 },
+                  textStyle: { bold: false },
+                  fields: "bold",
+                },
+              },
+            ],
+          },
+        });
+      }
+
+      const docAfterBoldCleanup = await docs.documents.get({ documentId: PRINT_DOC_ID });
+      const redTitleColor = {
+        foregroundColor: {
+          color: {
+            rgbColor: { red: 1, green: 0, blue: 0 },
+          },
+        },
+      };
+      const flete2TitleMarker = findMarkerRange(docAfterBoldCleanup, [
+        /(^|\n)\s*FLETE\s*2\b/i,
+        /(^|\n)\s*FLETE\s*II\b/i,
+        /FLETE\s*2\b/i,
+      ]);
+      const suma2TitleMarker = findMarkerRange(docAfterBoldCleanup, [
+        /(^|\n)\s*SUMA\s+FLETE\s*2\b/i,
+        /(^|\n)\s*SUMA\s+FLETE\s*II\b/i,
+        /SUMA\s+FLETE\s*2\b/i,
+      ]);
+
+      const redTitleRequests = [];
+      if (flete2TitleMarker?.startIndex && flete2TitleMarker?.endIndex) {
+        redTitleRequests.push({
+          updateTextStyle: {
+            range: {
+              startIndex: flete2TitleMarker.startIndex,
+              endIndex: flete2TitleMarker.endIndex,
+            },
+            textStyle: {
+              ...redTitleColor,
+              bold: false,
+            },
+            fields: "foregroundColor,bold",
+          },
+        });
+      }
+      if (suma2TitleMarker?.startIndex && suma2TitleMarker?.endIndex) {
+        redTitleRequests.push({
+          updateTextStyle: {
+            range: {
+              startIndex: suma2TitleMarker.startIndex,
+              endIndex: suma2TitleMarker.endIndex,
+            },
+            textStyle: {
+              ...redTitleColor,
+              bold: false,
+            },
+            fields: "foregroundColor,bold",
+          },
+        });
+      }
+      if (redTitleRequests.length) {
+        await docs.documents.batchUpdate({
+          documentId: PRINT_DOC_ID,
+          requestBody: { requests: redTitleRequests },
+        });
+      }
+
       const dateTokens = extractDateTokensFromDocHeaderFooter(refreshedDoc).filter(
         (token) => token && token !== today
       );

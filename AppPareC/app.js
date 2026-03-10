@@ -78,6 +78,8 @@ const clearOrderButtons = [clearOrderButton, clearOrderButtonSummary].filter(Boo
 const summaryContent = document.querySelector("#summary-content");
 const orderOutput = document.querySelector("#order-output");
 const catalogSearch = document.querySelector("#catalog-search");
+const pedidoTitle = document.querySelector("#pedido-title");
+const toggleGridViewButton = document.querySelector("#toggle-grid-view");
 const clientSelect = document.querySelector("#client-select");
 const orderSelect = document.querySelector("#order-select");
 const orderDirection = document.querySelector("#order-direction");
@@ -102,6 +104,10 @@ const savePartialModal = document.querySelector("#save-partial-modal");
 const savePartialMessage = document.querySelector("#save-partial-message");
 const savePartialYes = document.querySelector("#save-partial-yes");
 const savePartialNo = document.querySelector("#save-partial-no");
+const controlOnlyCurrentModal = document.querySelector("#control-only-current-modal");
+const controlOnlyCurrentMessage = document.querySelector("#control-only-current-message");
+const controlOnlyCurrentConfirm = document.querySelector("#control-only-current-confirm");
+const controlOnlyCurrentCancel = document.querySelector("#control-only-current-cancel");
 
 const loadingCurtain = document.querySelector("#loading-curtain");
 const hideLoadingCurtain = () => {
@@ -131,15 +137,25 @@ const updateTareasPdfButton = document.querySelector("#update-tareas-pdf");
 const updateImprimirPedidosButton = document.querySelector("#update-imprimir-pedidos");
 const updateTareasPdfStatus = document.querySelector("#update-tareas-pdf-status");
 const updateImprimirPedidosStatus = document.querySelector("#update-imprimir-pedidos-status");
+const controlCommentsReportButton = document.querySelector("#control-comments-report");
+const controlCommentsReportStatus = document.querySelector("#control-comments-report-status");
+const controlUnitsReportButton = document.querySelector("#control-units-report");
+const controlUnitsReportStatus = document.querySelector("#control-units-report-status");
 const tabCreateOrdersButton = document.querySelector("#tab-create-orders");
 const tabControlOrdersButton = document.querySelector("#tab-control-orders");
 const tabRepartoOrdersButton = document.querySelector("#tab-reparto-orders");
 const createOrdersPane = document.querySelector("#create-orders-pane");
 const controlOrdersPane = document.querySelector("#control-orders-pane");
 const repartoPane = document.querySelector("#reparto-pane");
+const controlOrdersDateSelect = document.querySelector("#control-orders-date");
+const controlOrdersOnlyCurrentButton = document.querySelector("#control-orders-only-current");
 const refreshControlOrdersButton = document.querySelector("#refresh-control-orders");
 const controlOrdersBody = document.querySelector("#control-orders-body");
 const controlOrdersStatus = document.querySelector("#control-orders-status");
+const controlUnitsReportWrap = document.querySelector("#control-units-report-wrap");
+const controlCommentsReportWrap = document.querySelector("#control-comments-report-wrap");
+const repartoProductsBody = document.querySelector("#reparto-products-body");
+const repartoProductsStatus = document.querySelector("#reparto-products-status");
 const clientControlsBlock = document.querySelector("#client-controls-block");
 const pdfActionsBlock = document.querySelector("#pdf-actions-block");
 const createSummaryPane = document.querySelector("#create-summary-pane");
@@ -1346,7 +1362,7 @@ const initApp = async () => {
   favoritesStore.loadFromSheet(values);
   getFavoritePresets = (productId, clientId = null) => {
     try {
-      return favoritesStore.getPresets(productId, clientId);
+      return favoritesStore.getFavoritePresets(productId, clientId);
     } catch (e) {
       return [];
     }
@@ -1361,6 +1377,15 @@ const initApp = async () => {
     confirmButtons,
     clearOrderButtons,
     productState,
+    getUnitsForProductId: (productId, fallbackUnit = "") => {
+      const product = productsById.get(String(productId || "").trim());
+      const units = Array.isArray(product?.units) ? product.units.filter(Boolean) : [];
+      if (units.length) {
+        return units;
+      }
+      const fallback = String(fallbackUnit || "").trim();
+      return fallback ? [fallback] : ["Unidad"];
+    },
     updateOutput: () => {},
     scheduleCoverageUpdate: () => {},
   });
@@ -1421,6 +1446,8 @@ const initApp = async () => {
   const catalogController = createCatalogController({
     itemsContainer,
     catalogSearch,
+    pedidoTitle,
+    toggleGridViewButton,
     orderSelect,
     orderDirection,
     uncategorizedContent,
@@ -1428,10 +1455,17 @@ const initApp = async () => {
     productState,
     cardByProductId,
     buildProductCard: productCardBuilder.buildProductCard,
+    createRowId,
+    updateItemState,
+    isUnitModeForced: (productId) => shouldForceUnitMode(productId, unitModeProducts),
+    coerceUnitForProduct,
+    coerceVariantForProduct,
     scheduleCoverageUpdate: layoutController.scheduleCoverageUpdate,
     scheduleMasonryUpdate: layoutController.scheduleMasonryUpdate,
     updateFavoriteIndicators,
     getFavoriteMeta: (productId) => favoritesStore.getFavoriteMeta(productId),
+    getFavoritePresets: (productId, clientId = null) => getFavoritePresets(productId, clientId),
+    unitModeProducts,
   });
 
   const orderController = createOrderController({
@@ -1528,9 +1562,41 @@ const initApp = async () => {
         });
       });
     },
+    resolveUnitsForControlItem: ({ productName, variant, unit } = {}) => {
+      const parsed = normalizeProductFromHeader(String(productName || ""), {
+        defaultUnitIfMissing: false,
+      });
+      const directKey = String(parsed?.key || "").trim();
+      const product = directKey ? productsById.get(directKey) : null;
+      const units = Array.isArray(product?.units) ? product.units.filter(Boolean) : [];
+      if (units.length) {
+        return units;
+      }
+      const fallback = String(unit || "").trim();
+      return fallback ? [fallback] : ["Unidad"];
+    },
+    listControlProductNames: () =>
+      Array.from(productsById.values())
+        .map((item) => String(item?.name || "").trim())
+        .filter(Boolean),
+    onlyCurrentModal: controlOnlyCurrentModal,
+    onlyCurrentMessage: controlOnlyCurrentMessage,
+    onlyCurrentConfirmButton: controlOnlyCurrentConfirm,
+    onlyCurrentCancelButton: controlOnlyCurrentCancel,
+    dateSelect: controlOrdersDateSelect,
+    onlyCurrentButton: controlOrdersOnlyCurrentButton,
     refreshButton: refreshControlOrdersButton,
     tableBody: controlOrdersBody,
     statusNode: controlOrdersStatus,
+    commentsReportButton: controlCommentsReportButton,
+    commentsReportStatus: controlCommentsReportStatus,
+    unitsReportButton: controlUnitsReportButton,
+    unitsReportStatus: controlUnitsReportStatus,
+    commentsReportWrap: controlCommentsReportWrap,
+    unitsReportWrap: controlUnitsReportWrap,
+    responsibleSelect,
+    repartoProductsBody,
+    repartoProductsStatus,
   });
 
   const importApplier = createImportApplier({
@@ -1693,6 +1759,12 @@ const initApp = async () => {
 
   clientSelect?.addEventListener("change", () => {
     refreshImportUiForClient();
+    try {
+      catalogController.renderProductGrid();
+      catalogController.filterCards();
+    } catch (error) {
+      console.warn("catalog refresh on client change failed:", error);
+    }
     responsiblesController.refreshForClient(String(clientSelect?.value || "")).catch((error) => {
       console.warn("responsiblesController refreshForClient failed:", error);
     });

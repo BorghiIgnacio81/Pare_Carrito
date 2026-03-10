@@ -20,6 +20,7 @@ export const createCatalogController = ({
   updateFavoriteIndicators,
   getFavoriteMeta,
   getFavoritePresets,
+  unitModeProducts,
 }) => {
   let currentView = "catalog";
 
@@ -92,14 +93,19 @@ export const createCatalogController = ({
           }
         : null;
 
+    const existingUnit = String(existing?.unit || "").trim();
+    const existingVariant = String(existing?.variant || "").trim();
+    const unitTouched = Boolean(existing?.unitTouched);
+    const variantTouched = Boolean(existing?.variantTouched);
+
     const preferredUnit =
-      !hasActiveData && favoritePreset?.unit
+      !hasActiveData && !unitTouched && favoritePreset?.unit
         ? favoritePreset.unit
-        : String(existing?.unit || "").trim();
+        : existingUnit;
     const preferredVariant =
-      !hasActiveData && favoritePreset?.variant
+      !hasActiveData && !variantTouched && favoritePreset?.variant
         ? favoritePreset.variant
-        : String(existing?.variant || "").trim();
+        : existingVariant;
 
     const fallbackRowId = `grid_${String(product?.id || "")}`;
     const rowId = String(existing?.rowId || "").trim() || fallbackRowId || createRowId?.();
@@ -123,6 +129,8 @@ export const createCatalogController = ({
       quantityText: String(existing?.quantityText || "").trim(),
       unitMode: Boolean(existing?.unitMode),
       comment: String(existing?.comment || "").trim(),
+      unitTouched,
+      variantTouched,
     };
   };
 
@@ -204,7 +212,13 @@ export const createCatalogController = ({
     const tbody = document.createElement("tbody");
     const renderProductRow = ({ product, state }) => {
       const forcedUnitMode = typeof isUnitModeForced === "function" ? isUnitModeForced(product.id) : false;
-      const unitMode = forcedUnitMode ? true : Boolean(state?.unitMode);
+      const normalizedProductName = String(product?.name || "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+      const allowUnitMode =
+        unitModeProducts instanceof Set ? unitModeProducts.has(normalizedProductName) : false;
+      const unitMode = forcedUnitMode ? true : allowUnitMode ? Boolean(state?.unitMode) : false;
       const rowId = String(state?.rowId || `grid_${String(product?.id || "")}`).trim();
       const effectiveLockedUnit =
         !includeUnitColumn && forceKgForPorotos && String(product?.id || "").toLowerCase() === "porotos"
@@ -260,6 +274,11 @@ export const createCatalogController = ({
       }
 
       const tdUnit = document.createElement("td");
+      const favoriteUnitSet = new Set(
+        ((typeof getFavoritePresets === "function" ? getFavoritePresets(product.id, "") : []) || [])
+          .map((preset) => String(preset?.unit || "").trim())
+          .filter(Boolean)
+      );
       const units = Array.isArray(product?.units) ? product.units.filter(Boolean) : [];
       const finalUnits = units.length ? units : [state.unit || "Unidad"];
       let selectedUnit = String(state?.unit || "").trim();
@@ -269,7 +288,7 @@ export const createCatalogController = ({
       if (finalUnits.length <= 1) {
         const staticUnit = document.createElement("span");
         staticUnit.className = "grid-table__static-text";
-        staticUnit.textContent = selectedUnit || "-";
+        staticUnit.textContent = selectedUnit || "";
         tdUnit.appendChild(staticUnit);
       } else {
         const unitSelect = document.createElement("select");
@@ -277,14 +296,14 @@ export const createCatalogController = ({
         finalUnits.forEach((unitName) => {
           const option = document.createElement("option");
           option.value = unitName;
-          option.textContent = unitName;
+          option.textContent = favoriteUnitSet.has(unitName) ? `★ ${unitName}` : unitName;
           if (selectedUnit === unitName) {
             option.selected = true;
           }
           unitSelect.appendChild(option);
         });
         unitSelect.addEventListener("change", () => {
-          commit({ unit: unitSelect.value });
+          commit({ unit: unitSelect.value, unitTouched: true });
         });
         tdUnit.appendChild(unitSelect);
       }
@@ -298,7 +317,7 @@ export const createCatalogController = ({
       if (!variants.length) {
         const staticVariant = document.createElement("span");
         staticVariant.className = "grid-table__static-text";
-        staticVariant.textContent = "-";
+        staticVariant.textContent = "";
         tdVariant.appendChild(staticVariant);
       } else {
         const variantSelect = document.createElement("select");
@@ -316,7 +335,7 @@ export const createCatalogController = ({
           variantSelect.appendChild(option);
         });
         variantSelect.addEventListener("change", () => {
-          commit({ variant: variantSelect.value });
+          commit({ variant: variantSelect.value, variantTouched: true });
         });
         tdVariant.appendChild(variantSelect);
       }
@@ -376,17 +395,19 @@ export const createCatalogController = ({
       tdQty.appendChild(qtyInput);
 
       const tdUnitMode = document.createElement("td");
-      if (forcedUnitMode) {
-        tdUnitMode.textContent = "-";
+      if (forcedUnitMode || !allowUnitMode) {
+        tdUnitMode.textContent = "";
       } else {
         const unitModeCheckbox = document.createElement("input");
         unitModeCheckbox.type = "checkbox";
         unitModeCheckbox.checked = unitMode;
         unitModeCheckbox.addEventListener("change", () => {
+          const rawQty = String(qtyInput.value || "").trim();
+          const fallbackQty = rawQty || String(state?.quantity || "").trim();
           commit({
             unitMode: Boolean(unitModeCheckbox.checked),
-            quantityText: unitModeCheckbox.checked ? String(qtyInput.value || "") : "",
-            quantity: unitModeCheckbox.checked ? parseQtyToNumber(qtyInput.value) : parseQtyToNumber(qtyInput.value),
+            quantityText: unitModeCheckbox.checked ? fallbackQty : "",
+            quantity: unitModeCheckbox.checked ? parseQtyToNumber(fallbackQty) : parseQtyToNumber(rawQty),
           });
         });
         tdUnitMode.appendChild(unitModeCheckbox);
